@@ -1,0 +1,32 @@
+{
+  "name": "email_scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "",
+  "main": "worker.ts",
+  "scripts": {
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "start": "npx tsx worker.ts",
+    "dev": "npx tsx watch worker.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.8",
+    "axios": "^1.12.2",
+    "cheerio": "^1.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "p-queue": "^8.1.0",
+    "pm2": "^6.0.14"
+  },
+  "devDependencies": {
+    "fast-check": "^4.1.1",
+    "nodemon": "^3.1.10",
+    "tsx": "^4.19.0",
+    "vitest": "^3.2.4"
+  }
+}

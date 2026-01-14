@@ -1,0 +1,23 @@
+{
+  "name": "email_scraper_worker",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scheduled worker for browser-based email scraping",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^17.2.3",
+    "p-queue": "^8.0.1",
+    "playwright": "^1.56.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
