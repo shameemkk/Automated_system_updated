@@ -62,7 +62,11 @@ async function processRow(row: any) {
         
         let finalStatus: string;
         if (hasData) {
-            finalStatus = 'completed';
+            if (!hasEmails) {
+                finalStatus = 'need_google_search';
+            } else {
+                finalStatus = 'completed';
+            }
         } else if (normalized.needs_browser_rendering) {
             finalStatus = 'need_browser_rendering';
         } else if (normalized.status === 'completed' && !hasEmails) {
