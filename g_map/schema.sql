@@ -172,3 +172,34 @@ begin
   returning *;
 end;
 $$;
+
+-- Trigger function to add website to email_scraper_node only for auto_completed queries
+create or replace function add_website_to_email_scraper_auto()
+returns trigger
+language plpgsql
+as $$
+declare
+  query_status text;
+begin
+  -- Get the status of the parent client_query
+  select status into query_status
+  from client_queries
+  where id = NEW.client_query_id;
+
+  -- Only insert if website is not null/empty AND parent query status is auto_completed
+  if NEW.website is not null and NEW.website != '' and query_status = 'auto_completed' then
+      insert into email_scraper_node (url, client_tag, status, client_query_result_id)
+      values (NEW.website, NEW.client_tag, 'auto_queued', NEW.id)
+      on conflict (url) do nothing;
+  end if;
+
+  return NEW;
+end;
+$$;
+
+-- Create trigger on client_query_results table for auto_completed
+drop trigger if exists trg_add_website_to_email_scraper_auto on client_query_results;
+create trigger trg_add_website_to_email_scraper_auto
+after insert on client_query_results
+for each row
+execute function add_website_to_email_scraper_auto();
