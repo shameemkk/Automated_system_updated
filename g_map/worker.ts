@@ -9,7 +9,7 @@ dotenv.config();
 // --- CONFIGURATION ---
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
-const MAX_CONCURRENCY = parseInt(process.env.MAX_CONCURRENCY || '300', 10);
+const MAX_CONCURRENCY = parseInt(process.env.MAX_CONCURRENCY || '100', 10);
 const EXTERNAL_API_URL = process.env.EXTERNAL_API_URL || '';
 const SCRAPER_API_KEY = process.env.SCRAPER_API_KEY || '';
 const EXTERNAL_API_TIMEOUT = 120000;
@@ -75,17 +75,17 @@ function extractZipCode(addressArray: string[] | null): string | null {
 // --- CORE WORKER LOGIC ---
 
 /**
- * Fetch queued client_queries and mark as processing
- * Groups by client_tag - processes all items from one tag before moving to next
+ * Fetch auto_queued and auto_error client_queries and mark as auto_processing
+ * Prioritizes auto_queued over auto_error
  */
-async function fetchClientQueries(batchSize: number): Promise<any[]> {
+async function fetchAutoClientQueries(batchSize: number): Promise<any[]> {
     if (batchSize <= 0) return [];
 
     const { data, error } = await supabase
-        .rpc('fetch_queries', { p_batch_size: batchSize });
+        .rpc('fetch_auto_queries', { p_batch_size: batchSize });
 
     if (error) {
-        console.error('Error fetching client_queries via RPC:', error);
+        console.error('Error fetching auto client_queries via RPC:', error);
         return [];
     }
 
@@ -182,8 +182,8 @@ async function processClientQuery(row: any) {
             const { error: updateError } = await supabase
                 .from('client_queries')
                 .update({
-                    status: 'completed',
-                    api_status: 'ok',
+                    status: 'auto_completed',
+                    api_status: 'auto_ok',
                     length: businesses.length
                 })
                 .eq('id', row.id);
@@ -211,7 +211,7 @@ async function processClientQuery(row: any) {
         await supabase
             .from('client_queries')
             .update({
-                status: 'error',
+                status: 'auto_error',
                 api_status: errorMessage
             })
             .eq('id', row.id);
@@ -233,7 +233,7 @@ async function mainLoop() {
     const { count: queuedCount, error: qErr } = await supabase
         .from('client_queries')
         .select('*', { count: 'exact', head: true })
-        .eq('status', 'queued');
+        .eq('status', 'auto_queued');
 
     if (qErr) {
         console.error("Startup check failed. Check credentials/connection.", qErr);
@@ -247,11 +247,11 @@ async function mainLoop() {
             const slotsAvailable = MAX_CONCURRENCY - currentPending;
 
             if (slotsAvailable > 0) {
-                const jobs = await fetchClientQueries(slotsAvailable);
+                const jobs = await fetchAutoClientQueries(slotsAvailable);
 
                 if (jobs.length > 0) {
                     backoffMs = 1000;
-                    console.log(`Claimed ${jobs.length} jobs.`);
+                    console.log(`Claimed ${jobs.length} jobs (auto_queued/auto_error).`);
                     jobs.forEach(row => {
                         queue.add(() => processClientQuery(row));
                     });
