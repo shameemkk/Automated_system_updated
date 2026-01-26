@@ -40,6 +40,13 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
     }
 });
 
+// Cache for client ZIP codes - fetched once at startup
+const clientZipCodesCache = new Map<string, Set<string>>();
+
+// Mutex to prevent concurrent cache refreshes
+let isRefreshing = false;
+const refreshWaiters: Array<() => void> = [];
+
 // Concurrency Queue
 const queue = new PQueue({ concurrency: MAX_CONCURRENCY });
 
@@ -48,6 +55,90 @@ let shuttingDown = false;
 // --- UTILITIES ---
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Fetch all client_details and populate the ZIP code cache
+ * Called at startup and when new client_tags are encountered
+ * Protected by mutex to prevent concurrent refreshes
+ */
+async function loadClientZipCodes() {
+    console.log('Loading client ZIP codes from client_details...');
+    const { data, error } = await supabase
+        .from('client_details')
+        .select('client_tag, zip_codes');
+
+    if (error) {
+        console.error('Error loading client_details:', error);
+        return;
+    }
+
+    if (!data || data.length === 0) {
+        console.warn('No client_details found. All results will be filtered out.');
+        return;
+    }
+
+    // Clear existing cache and reload all
+    clientZipCodesCache.clear();
+    
+    for (const row of data) {
+        const zipSet = new Set<string>(row.zip_codes || []);
+        clientZipCodesCache.set(row.client_tag, zipSet);
+    }
+
+    console.log(`Loaded ZIP codes for ${clientZipCodesCache.size} client tags.`);
+}
+
+/**
+ * Thread-safe cache refresh with mutex protection
+ * Ensures only one refresh happens at a time, others wait
+ */
+async function safeRefreshCache(): Promise<void> {
+    // If already refreshing, wait for it to complete
+    if (isRefreshing) {
+        console.log('Cache refresh already in progress, waiting...');
+        return new Promise<void>((resolve) => {
+            refreshWaiters.push(resolve);
+        });
+    }
+
+    // Acquire lock
+    isRefreshing = true;
+    
+    try {
+        await loadClientZipCodes();
+    } finally {
+        // Release lock and notify all waiters
+        isRefreshing = false;
+        const waiters = refreshWaiters.splice(0);
+        waiters.forEach(resolve => resolve());
+    }
+}
+
+/**
+ * Check if a ZIP code is allowed for a given client_tag
+ * Returns true if allowed, false otherwise
+ * Refreshes all client_tags if the requested one is not in cache (thread-safe)
+ */
+async function isZipCodeAllowed(clientTag: string, zipCode: string | null): Promise<boolean> {
+    if (!zipCode) return false;
+    
+    let allowedZips = clientZipCodesCache.get(clientTag);
+    
+    // If client_tag not in cache, refresh all client_tags (thread-safe)
+    if (!allowedZips) {
+        console.log(`Client tag '${clientTag}' not found in cache. Refreshing all client_tags...`);
+        await safeRefreshCache();
+        
+        // Check again after refresh
+        allowedZips = clientZipCodesCache.get(clientTag);
+        if (!allowedZips) {
+            console.warn(`Client tag '${clientTag}' not found in client_details after refresh.`);
+            return false;
+        }
+    }
+    
+    return allowedZips.has(zipCode);
+}
 
 /**
  * Extract zip/postal code from full_address_array using regex
@@ -131,7 +222,7 @@ async function processClientQuery(row: any) {
 
             // Insert results into client_query_results
             if (businesses.length > 0) {
-                const results = businesses.map((biz: any) => ({
+                const allResults = businesses.map((biz: any) => ({
                     client_query_id: row.id,
                     client_tag: row.client_tag,
                     name: biz.name,
@@ -144,8 +235,20 @@ async function processClientQuery(row: any) {
                     place_link: biz.place_link,
                     timezone: biz.timezone,
                     review_count: biz.review_count,
-                    rating: biz.rating
-                })).filter((r: any) => r.zip_code !== null && r.website !== null);
+                    rating: biz.rating,
+                    mode: 'auto'
+                }));
+
+                // Filter results asynchronously with ZIP code check
+                const results: any[] = [];
+                for (const r of allResults) {
+                    if (r.zip_code !== null && r.website !== null) {
+                        const allowed = await isZipCodeAllowed(row.client_tag, r.zip_code);
+                        if (allowed) {
+                            results.push(r);
+                        }
+                    }
+                }
 
                 if (results.length > 0) {
                     // Batch check: get all websites that already exist in "google map scraped data v1"
@@ -225,6 +328,9 @@ async function mainLoop() {
     const maxBackoff = 60000;
 
     console.log(`Starting Supabase worker with max concurrency: ${MAX_CONCURRENCY}`);
+
+    // Load client ZIP codes once at startup
+    await loadClientZipCodes();
 
     // Startup Check
     const { count: queuedCount, error: qErr } = await supabase
