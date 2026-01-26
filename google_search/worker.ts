@@ -82,8 +82,8 @@ async function processRow(row: any) {
     try {
         await sleep(API_CALL_DELAY);
 
-        // Extract domain from URL
-        const domain = row.url.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+        // Extract domain from URL (strip protocol, path, and www.)
+        const domain = row.url.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
         const query = `${domain} emails (site:${domain})`;
         const apiUrl = `https://google-search116.p.rapidapi.com/?query=${encodeURIComponent(query)}`;
 

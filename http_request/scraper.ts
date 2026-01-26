@@ -117,6 +117,94 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 // EMAIL & URL EXTRACTION FUNCTIONS
 // =========================================================================
 
+// Blocked domain patterns (tracking, platforms, CDNs, etc.)
+const BLOCKED_DOMAINS = new Set([
+  // Error tracking & monitoring
+  'sentry.io', 'sentry.wixpress.com', 'sentry-next.wixpress.com', 'ingest.sentry.io',
+  'newrelic.com', 'rollbar.com', 'datadoghq.com', 'bugsnag.com',
+  // Platforms & hosting
+  'wordpress.com', 'wordpress.org', 'wpengine.com', 'wix.com', 'squarespace.com',
+  'shopify.com', 'shopifyemail.com', 'bigcommerce.com', 'weebly.com', 'webflow.io',
+  'ghost.org', 'godaddy.com', 'cloudflare.com', 'cloudfront.net', 'amazonaws.com',
+  'azure.com', 'digitalocean.com', 'linode.com', 'heroku.com', 'netlify.app',
+  'vercel.app', 'render.com', 'cloudwaysapps.com',
+  // Social media
+  'facebook.com', 'instagram.com', 'linkedin.com', 'twitter.com', 'x.com',
+  'youtube.com', 'tiktok.com', 'pinterest.com',
+  // Fonts & assets
+  'fonts.googleapis.com', 'use.typekit.net', 'latofonts.com', 'fontsquirrel.com',
+  'myfonts.com', 'antsoup.com',
+  // Placeholder domains
+  'example.com', 'domain.com', 'email.com', 'mysite.com', 'sample.com', 'test.com',
+  'yoursite.com', 'companyname.com', 'business.com', 'website.com', 'businessname.com',
+  'company.com', 'info.com', 'domain.co', 'domain.net'
+]);
+
+// Blocked local parts (generic/placeholder usernames)
+const BLOCKED_LOCAL_PARTS = new Set([
+  'noreply', 'no-reply', 'donotreply', 'do-not-reply',
+  'firstname', 'lastname', 'yourname', 'fullname', 'username', 'user.name',
+  'johnsmith', 'john.doe', 'alex.smith', 'user', 'filler', 'placeholder',
+  'your', 'name', 'email'
+]);
+
+// Patterns that indicate junk emails
+const BLOCKED_PATTERNS = [
+  /^[%\s\?&]/,                    // Starts with %, whitespace, ? or &
+  /^@/,                           // Starts with @
+  /@.*@/,                         // Multiple @ symbols
+  /\.(css|js|json|xml|map|min\.js|min\.css|woff|woff2|ttf|eot|pdf)$/i,  // File extensions
+  /\.(png|jpg|jpeg|gif|svg|webp|ico)$/i,  // Image extensions
+  /@\d+x\.(png|jpg|jpeg|gif|svg|webp)$/i, // Retina images (@1x.png, @2x.png)
+  /^(sprite|icon|logo|banner|image|font)/i,  // Asset-related
+  /%[0-9A-Fa-f]{2}/,              // URL encoded characters
+  /\?/,                           // Any query string (email@domain.com?subject=)
+  /subject=/i,                    // mailto params
+  /body=/i,
+  /&/,                            // URL params
+  /@o\d+\.ingest\.sentry\.io/i,   // Sentry org-specific
+  /wixpress\.com$/i,
+  /sentry/i,
+  /shoplocal/i,                   // ShopLocal platform junk
+  /news\.cfm/i,                   // ColdFusion URLs captured as emails
+];
+
+function isJunkEmail(email: string): boolean {
+  if (!email || typeof email !== 'string') return true;
+  
+  const normalized = email.toLowerCase().trim();
+  
+  // Check blocked patterns
+  for (const pattern of BLOCKED_PATTERNS) {
+    if (pattern.test(normalized)) return true;
+  }
+  
+  // Parse email parts
+  const atIndex = normalized.lastIndexOf('@');
+  if (atIndex === -1 || atIndex === 0 || atIndex === normalized.length - 1) return true;
+  
+  const localPart = normalized.substring(0, atIndex);
+  const domain = normalized.substring(atIndex + 1);
+  
+  // Check blocked local parts
+  if (BLOCKED_LOCAL_PARTS.has(localPart)) return true;
+  
+  // Check blocked domains (exact match or subdomain)
+  if (BLOCKED_DOMAINS.has(domain)) return true;
+  for (const blocked of BLOCKED_DOMAINS) {
+    if (domain.endsWith(`.${blocked}`)) return true;
+  }
+  
+  // Additional validation
+  if (localPart.length < 2 || domain.length < 4) return true;
+  if (!domain.includes('.')) return true;
+  
+  // Check for image/asset patterns in local part
+  if (/^(sprite|icon|logo|banner|image|font|@\d+x)/i.test(localPart)) return true;
+  
+  return false;
+}
+
 function extractEmails(html: string): string[] {
   const emails: string[] = [];
   const mailtoRegex = /href=["']mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})["']/gi;
@@ -130,7 +218,8 @@ function extractEmails(html: string): string[] {
   const textEmails = textContent.match(emailRegex) || [];
   emails.push(...textEmails);
   
-  return [...new Set(emails)];
+  // Filter out junk emails and dedupe
+  return [...new Set(emails)].filter(email => !isJunkEmail(email));
 }
 
 function extractFacebookUrls(text: string): string[] {

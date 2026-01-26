@@ -159,7 +159,7 @@ async function processClientQuery(row: any) {
                         .in('website', websites);
 
                     const existingWebsites = new Set((existingData || []).map((d: any) => d.website));
-                    if (DEBUG) console.log(websites);
+                    // if (DEBUG) console.log(websites);
                     // Filter out results that already exist
                     const newResults = results.filter((r: any) => !existingWebsites.has(r.website));
 
@@ -173,6 +173,7 @@ async function processClientQuery(row: any) {
                         if (insertError && insertError.code !== '23505') {
                             throw insertError;
                         }
+                        console.log("insertError:", insertError);
                     }
                 }
             }

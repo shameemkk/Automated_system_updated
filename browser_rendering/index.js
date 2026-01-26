@@ -32,6 +32,102 @@ const USER_AGENTS = [
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/118.0.0.0 Safari/537.36',
 ];
 const COMMON_PAGE_PATHS = ['/contact', '/about', '/contact-us', '/about-us'];
+
+// =========================================================================
+// EMAIL FILTERING
+// =========================================================================
+
+// Blocked domain patterns (tracking, platforms, CDNs, etc.)
+const BLOCKED_DOMAINS = new Set([
+  // Error tracking & monitoring
+  'sentry.io', 'sentry.wixpress.com', 'sentry-next.wixpress.com', 'ingest.sentry.io',
+  'newrelic.com', 'rollbar.com', 'datadoghq.com', 'bugsnag.com',
+  // Platforms & hosting
+  'wordpress.com', 'wordpress.org', 'wpengine.com', 'wix.com', 'squarespace.com',
+  'shopify.com', 'shopifyemail.com', 'bigcommerce.com', 'weebly.com', 'webflow.io',
+  'ghost.org', 'godaddy.com', 'cloudflare.com', 'cloudfront.net', 'amazonaws.com',
+  'azure.com', 'digitalocean.com', 'linode.com', 'heroku.com', 'netlify.app',
+  'vercel.app', 'render.com', 'cloudwaysapps.com',
+  // Social media
+  'facebook.com', 'instagram.com', 'linkedin.com', 'twitter.com', 'x.com',
+  'youtube.com', 'tiktok.com', 'pinterest.com',
+  // Fonts & assets
+  'fonts.googleapis.com', 'use.typekit.net', 'latofonts.com', 'fontsquirrel.com',
+  'myfonts.com', 'antsoup.com',
+  // Placeholder domains
+  'example.com', 'domain.com', 'email.com', 'mysite.com', 'sample.com', 'test.com',
+  'yoursite.com', 'companyname.com', 'business.com', 'website.com', 'businessname.com',
+  'company.com', 'info.com', 'domain.co', 'domain.net'
+]);
+
+// Blocked local parts (generic/placeholder usernames)
+const BLOCKED_LOCAL_PARTS = new Set([
+  'noreply', 'no-reply', 'donotreply', 'do-not-reply',
+  'firstname', 'lastname', 'yourname', 'fullname', 'username', 'user.name',
+  'johnsmith', 'john.doe', 'alex.smith', 'user', 'filler', 'placeholder',
+  'your', 'name', 'email'
+]);
+
+// Patterns that indicate junk emails
+const BLOCKED_PATTERNS = [
+  /^[%\s?&]/,                     // Starts with %, whitespace, ? or &
+  /^@/,                           // Starts with @
+  /@.*@/,                         // Multiple @ symbols
+  /\.(css|js|json|xml|map|min\.js|min\.css|woff|woff2|ttf|eot|pdf)$/i,
+  /\.(png|jpg|jpeg|gif|svg|webp|ico)$/i,
+  /@\d+x\.(png|jpg|jpeg|gif|svg|webp)$/i,
+  /^(sprite|icon|logo|banner|image|font)/i,
+  /%[0-9A-Fa-f]{2}/,              // URL encoded characters
+  /\?/,                           // Any query string
+  /subject=/i,
+  /body=/i,
+  /&/,                            // URL params
+  /@o\d+\.ingest\.sentry\.io/i,
+  /wixpress\.com$/i,
+  /sentry/i,
+  /shoplocal/i,
+  /news\.cfm/i,
+];
+
+function isJunkEmail(email) {
+  if (!email || typeof email !== 'string') return true;
+  
+  const normalized = email.toLowerCase().trim();
+  
+  // Check blocked patterns
+  for (const pattern of BLOCKED_PATTERNS) {
+    if (pattern.test(normalized)) return true;
+  }
+  
+  // Parse email parts
+  const atIndex = normalized.lastIndexOf('@');
+  if (atIndex === -1 || atIndex === 0 || atIndex === normalized.length - 1) return true;
+  
+  const localPart = normalized.substring(0, atIndex);
+  const domain = normalized.substring(atIndex + 1);
+  
+  // Check blocked local parts
+  if (BLOCKED_LOCAL_PARTS.has(localPart)) return true;
+  
+  // Check blocked domains (exact match or subdomain)
+  if (BLOCKED_DOMAINS.has(domain)) return true;
+  for (const blocked of BLOCKED_DOMAINS) {
+    if (domain.endsWith(`.${blocked}`)) return true;
+  }
+  
+  // Additional validation
+  if (localPart.length < 2 || domain.length < 4) return true;
+  if (!domain.includes('.')) return true;
+  
+  // Check for image/asset patterns in local part
+  if (/^(sprite|icon|logo|banner|image|font|@\d+x)/i.test(localPart)) return true;
+  
+  return false;
+}
+
+function filterEmails(emails) {
+  return emails.filter(email => !isJunkEmail(email));
+}
 const PLAYWRIGHT_LAUNCH_ARGS = [
   '--disable-dev-shm-usage', '--disable-gpu', '--no-zygote', '--no-sandbox',
   '--disable-background-networking', '--disable-default-apps', '--disable-extensions',
@@ -200,7 +296,7 @@ async function scrapeUrl(url, depth, visitedUrls, earlyExitSignal) {
       return { emails: [...emails], facebookUrls: [...facebookUrls], links: [...links] };
     }, MAX_LINKS_PER_PAGE);
 
-    result.emails = data.emails;
+    result.emails = filterEmails(data.emails);
     result.facebookUrls = data.facebookUrls;
 
     if (depth < MAX_DEPTH && result.emails.length === 0) {
