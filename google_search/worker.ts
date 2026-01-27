@@ -107,7 +107,7 @@ async function processRow(row: any) {
         const { error } = await supabase
             .from('email_scraper_node')
             .update({
-                status: 'completed',
+                status: 'auto_completed',
                 emails: emails,
                 scrape_type: 'google_search',
                 updated_at: new Date().toISOString()
@@ -134,7 +134,7 @@ async function processRow(row: any) {
         await supabase
             .from('email_scraper_node')
             .update({
-                status: 'gs_error',
+                status: 'auto_gs_error',
                 message: errorMessage,
                 scrape_type: 'google_search',
                 updated_at: new Date().toISOString()
@@ -154,7 +154,7 @@ async function fetchAndClaim(slots: number): Promise<any[]> {
     const { data, error } = await supabase
         .from('email_scraper_node')
         .select('*')
-        .eq('status', 'need_google_search')
+        .eq('status', 'auto_need_google_search')
         .limit(slots);
 
     if (error) {
@@ -166,7 +166,7 @@ async function fetchAndClaim(slots: number): Promise<any[]> {
         const ids = data.map(r => r.id);
         await supabase
             .from('email_scraper_node')
-            .update({ status: 'gs_processing', scrape_type: 'google_search', updated_at: new Date().toISOString() })
+            .update({ status: 'auto_gs_processing', scrape_type: 'google_search', updated_at: new Date().toISOString() })
             .in('id', ids);
     }
 
@@ -182,7 +182,7 @@ async function mainLoop() {
     const { count: queuedCount, error: qErr } = await supabase
         .from('email_scraper_node')
         .select('*', { count: 'exact', head: true })
-        .eq('status', 'need_google_search');
+        .eq('status', 'auto_need_google_search');
 
     if (qErr) {
         console.error("Startup check failed.", qErr);
@@ -210,16 +210,16 @@ async function mainLoop() {
                         const { data: errorJobs, error: errErr } = await supabase
                             .from('email_scraper_node')
                             .select('id')
-                            .eq('status', 'gs_error')
+                            .eq('status', 'auto_gs_error')
                             .limit(slotsAvailable);
 
                         if (!errErr && errorJobs && errorJobs.length > 0) {
                             const ids = errorJobs.map(r => r.id);
                             await supabase
                                 .from('email_scraper_node')
-                                .update({ status: 'need_google_search', updated_at: new Date().toISOString() })
+                                .update({ status: 'auto_need_google_search', updated_at: new Date().toISOString() })
                                 .in('id', ids);
-                            console.log(`♻️ Re-queued ${errorJobs.length} gs_error jobs for retry.`);
+                            console.log(`♻️ Re-queued ${errorJobs.length} auto_gs_error jobs for retry.`);
                             backoffMs = 1000;
                             continue;
                         }

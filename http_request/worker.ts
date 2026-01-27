@@ -63,14 +63,14 @@ async function processRow(row: any) {
         let finalStatus: string;
         if (hasData) {
             if (!hasEmails) {
-                finalStatus = 'need_google_search';
+                finalStatus = 'auto_need_google_search';
             } else {
-                finalStatus = 'completed';
+                finalStatus = 'auto_completed';
             }
         } else if (normalized.needs_browser_rendering) {
-            finalStatus = 'need_browser_rendering';
-        } else if (normalized.status === 'completed' && !hasEmails) {
-            finalStatus = 'need_google_search';
+            finalStatus = 'auto_need_browser_rendering';
+        } else if (normalized.status === 'auto_completed' && !hasEmails) {
+            finalStatus = 'auto_need_google_search';
         } else {
             finalStatus = normalized.status;
         }
@@ -91,7 +91,7 @@ async function processRow(row: any) {
         if (error) {
             console.error(`[Worker] DB update failed for job ${row.id}:`, error);
             stats.errors++;
-        } else if (normalized.status === 'error') {
+        } else if (normalized.status === 'auto_error') {
             stats.errors++;
         } else {
             stats.processed++;
@@ -108,7 +108,7 @@ async function processRow(row: any) {
         const { error: updateError } = await supabase
             .from('email_scraper_node')
             .update({
-                status: 'error',
+                status: 'auto_error',
                 message: errorMessage,
                 updated_at: new Date().toISOString()
             })
@@ -153,7 +153,7 @@ async function mainLoop() {
     const { count: queuedCount, error: qErr } = await supabase
         .from('email_scraper_node')
         .select('*', { count: 'exact', head: true })
-        .eq('status', 'queued')
+        .eq('status', 'auto_queued')
         .eq('scrape_type', 'http_request');
 
 

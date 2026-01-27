@@ -3,7 +3,7 @@
  */
 
 export interface NormalizedResult {
-    status: 'completed' | 'error';
+    status: 'auto_completed' | 'auto_error';
     emails: string[];
     facebook_urls: string[];
     message: string | null;
@@ -28,7 +28,7 @@ export function normalizeResponse(items: { json: any }[]): NormalizedItem[] {
         if (data.success === true) {
             return {
                 json: {
-                    status: "completed" as const,
+                    status: "auto_completed" as const,
                     emails: Array.isArray(data.emails) ? data.emails : [],
                     facebook_urls: Array.isArray(data.facebook_urls) ? data.facebook_urls : [],
                     message: null,
@@ -39,7 +39,7 @@ export function normalizeResponse(items: { json: any }[]): NormalizedItem[] {
         if (data.error) {
             return {
                 json: {
-                    status: "error" as const,
+                    status: "auto_error" as const,
                     emails: [],
                     facebook_urls: [],
                     message: data.error.message || "Unknown error",
@@ -49,7 +49,7 @@ export function normalizeResponse(items: { json: any }[]): NormalizedItem[] {
         }
         return {
             json: {
-                status: "error" as const,
+                status: "auto_error" as const,
                 emails: [],
                 facebook_urls: [],
                 message: "Invalid response format",

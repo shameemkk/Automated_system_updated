@@ -387,10 +387,10 @@ function isRecoverableError(errorMsg) {
 function normalizeResponse(result) {
   if (!result.success) {
     const errorMsg = result.errors?.[0]?.error || 'Scrape failed';
-    // If error is timeout or connection issue, mark as need_google_search (recoverable)
+    // If error is timeout or connection issue, mark as auto_need_google_search (recoverable)
     const isRecoverable = isRecoverableError(errorMsg);
     return { 
-      status: isRecoverable ? 'need_google_search' : 'error', 
+      status: isRecoverable ? 'auto_need_google_search' : 'auto_error', 
       emails: [], 
       facebook_urls: [], 
       message: errorMsg, 
@@ -398,9 +398,9 @@ function normalizeResponse(result) {
     };
   }
   const hasEmails = result.emails.length > 0;
-  // If completed but no emails, mark as need_google_search
+  // If completed but no emails, mark as auto_need_google_search
   return {
-    status: hasEmails ? 'completed' : 'need_google_search',
+    status: hasEmails ? 'auto_completed' : 'auto_need_google_search',
     emails: result.emails || [],
     facebook_urls: result.facebook_urls || [],
     message: hasEmails ? null : 'No emails found',
@@ -431,7 +431,7 @@ async function processRow(row) {
     if (error) {
       console.error(`[Worker] DB update failed for job ${row.id}:`, error);
       stats.errors++;
-    } else if (normalized.status === 'error') {
+    } else if (normalized.status === 'auto_error') {
       stats.errors++;
     } else {
       stats.processed++;
@@ -443,7 +443,7 @@ async function processRow(row) {
     await supabase
       .from('email_scraper_node')
       .update({ 
-        status: isRecoverable ? 'need_google_search' : 'error', 
+        status: isRecoverable ? 'auto_need_google_search' : 'auto_error', 
         message: errorMessage, 
         scrape_type: 'browser_rendering', 
         updated_at: new Date().toISOString() 
@@ -475,7 +475,7 @@ async function mainLoop() {
   const { count, error: qErr } = await supabase
     .from('email_scraper_node')
     .select('*', { count: 'exact', head: true })
-    .eq('status', 'need_browser_rendering');
+    .eq('status', 'auto_need_browser_rendering');
 
   if (qErr) console.error("Startup check failed:", qErr);
   else console.log(`Startup: ${count} jobs queued`);
