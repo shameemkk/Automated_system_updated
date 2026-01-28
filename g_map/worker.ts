@@ -236,7 +236,8 @@ async function processClientQuery(row: any) {
                     timezone: biz.timezone,
                     review_count: biz.review_count,
                     rating: biz.rating,
-                    mode: 'auto'
+                    mode: 'auto',
+                    processed: true,
                 }));
 
                 // Filter results asynchronously with ZIP code check
