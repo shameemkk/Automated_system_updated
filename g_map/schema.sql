@@ -14,7 +14,7 @@ create table public.client_queries (
 
 
 
-create or replace function change_not_used_to_queued(
+create or replace function change_not_used_to_auto_queued(
   p_client_tag text,
   p_batch_size int
 )
@@ -24,7 +24,7 @@ as $$
 begin
   return query
   update client_queries
-  set status = 'queued'
+  set status = 'auto_queued'
   where id in (
     select id
     from client_queries
