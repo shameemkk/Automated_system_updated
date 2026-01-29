@@ -457,7 +457,7 @@ async function processRow(row) {
 
 async function fetchAndClaim(slots) {
   if (slots <= 0) return [];
-  const { data, error } = await supabase.rpc('get_next_email_scraper_nodes_need_browser_rendering', { batch_size: slots });
+  const { data, error } = await supabase.rpc('auto_get_next_email_scraper_nodes_need_browser_rendering', { batch_size: slots });
   if (error) {
     console.error('Error claiming rows via RPC:', error);
     return [];
