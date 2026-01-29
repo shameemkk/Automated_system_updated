@@ -38,16 +38,16 @@ ON public.email_scraper_node (status, scrape_type, created_at)
 WHERE status = 'need_browser_rendering' ;
 
 -- RPC Function for worker (only processes http_request scrape_type)
-CREATE OR REPLACE FUNCTION get_next_email_scraper_nodes_need_browser_rendering(batch_size INT)
+CREATE OR REPLACE FUNCTION auto_get_next_email_scraper_nodes_need_browser_rendering(batch_size INT)
 RETURNS SETOF public.email_scraper_node AS $$
 BEGIN
   RETURN QUERY
   UPDATE public.email_scraper_node
-  SET status = 'processing', updated_at = NOW()
+  SET status = 'auto_processing', updated_at = NOW()
   WHERE id IN (
     SELECT id
     FROM public.email_scraper_node
-    WHERE status = 'need_browser_rendering'
+    WHERE status = 'auto_need_browser_rendering'
     ORDER BY created_at ASC
     LIMIT batch_size
     FOR UPDATE SKIP LOCKED

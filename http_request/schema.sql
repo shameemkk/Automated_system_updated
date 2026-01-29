@@ -33,19 +33,19 @@ EXECUTE FUNCTION set_updated_at();
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_email_scraper_node_status_scrape_type 
 ON public.email_scraper_node (status, scrape_type, created_at) 
-WHERE status = 'queued' AND scrape_type = 'http_request';
+WHERE status = 'auto_queued' AND scrape_type = 'http_request';
 
 -- RPC Function for worker (only processes http_request scrape_type)
-CREATE OR REPLACE FUNCTION get_next_email_scraper_nodes_http_request(batch_size INT)
+CREATE OR REPLACE FUNCTION auto_get_next_email_scraper_nodes_http_request(batch_size INT)
 RETURNS SETOF public.email_scraper_node AS $$
 BEGIN
   RETURN QUERY
   UPDATE public.email_scraper_node
-  SET status = 'processing', updated_at = NOW()
+  SET status = 'auto_processing', updated_at = NOW()
   WHERE id IN (
     SELECT id
     FROM public.email_scraper_node
-    WHERE status = 'queued'
+    WHERE status = 'auto_queued'
       AND scrape_type = 'http_request'
     ORDER BY created_at ASC
     LIMIT batch_size
@@ -56,16 +56,16 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- RPC Function to retry error jobs (only http_request scrape_type)
-CREATE OR REPLACE FUNCTION retry_error_jobs_http_request()
+CREATE OR REPLACE FUNCTION auto_retry_error_jobs_http_request()
 RETURNS INT AS $$
 DECLARE
   affected_rows INT;
 BEGIN
   UPDATE public.email_scraper_node
-  SET status = 'queued',
+  SET status = 'auto_queued',
       retry_count = retry_count + 1,
       updated_at = NOW()
-  WHERE status = 'error'
+  WHERE status = 'auto_error'
     AND scrape_type = 'http_request'
     AND retry_count <= 1;
   
