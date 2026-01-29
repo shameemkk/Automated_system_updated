@@ -133,7 +133,7 @@ async function fetchAndClaim(slots: number): Promise<any[]> {
 
     // Use RPC 'get_next_urls' to perform the SKIP LOCKED select + update
     const { data, error } = await supabase
-        .rpc('get_next_email_scraper_nodes_http_request', { batch_size: slots });
+        .rpc('auto_get_next_email_scraper_nodes_http_request', { batch_size: slots });
 
     if (error) {
         console.error('Error claiming rows via RPC:', error);
@@ -167,7 +167,7 @@ async function mainLoop() {
             
             // Re-queue error jobs with retry_count <= 2 using RPC
             const { data: retriedCount, error: retryErr } = await supabase
-                .rpc('retry_error_jobs_http_request');
+                .rpc('auto_retry_error_jobs_http_request');
 
             if (retryErr) {
                 console.error('Error retrying failed jobs:', retryErr);
@@ -197,7 +197,7 @@ async function mainLoop() {
                     if (queue.size === 0 && queue.pending === 0) {
                         // No queued jobs, check for retryable error jobs
                         const { data: retriedCount, error: retryErr } = await supabase
-                            .rpc('retry_error_jobs_http_request');
+                            .rpc('auto_retry_error_jobs_http_request');
 
                         if (!retryErr && retriedCount && retriedCount > 0) {
                             console.log(`♻️ Re-queued ${retriedCount} error jobs for retry.`);
