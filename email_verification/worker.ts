@@ -11,7 +11,7 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const MILLION_VERIFIER_API_KEY = process.env.MILLION_VERIFIER_API_KEY || '';
 const TRYKITT_API_KEY = process.env.TRYKITT_API_KEY || '';
 
-const MAX_CONCURRENCY = 6; // Rate limit: 6 req/sec
+const MAX_CONCURRENCY = 150; // Rate limit: 6 req/sec
 const EXTERNAL_API_TIMEOUT = 300000;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
@@ -251,7 +251,8 @@ async function processRow(row: any) {
                     .from('client_query_results')
                     .update({ 
                         verified_emails: allVerifiedEmails,
-                        mode: 'auto_finished'
+                        mode: 'auto_email_verified',
+                        gpt_process : 'auto_queued'
                     })
                     .eq('id', clientResult.id);
 
