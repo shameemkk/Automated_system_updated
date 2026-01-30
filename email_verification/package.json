@@ -1,0 +1,26 @@
+{
+  "name": "email_verification",
+  "version": "1.0.0",
+  "description": "",
+  "main": "worker.js",
+  "type": "module",
+  "scripts": {
+    "start": "npx tsx worker.ts",
+    "dev": "npx tsx watch worker.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.90.1",
+    "axios": "^1.13.2",
+    "dotenv": "^17.2.3",
+    "p-queue": "^9.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.8",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
