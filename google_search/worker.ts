@@ -103,11 +103,12 @@ async function processRow(row: any) {
             ? data.results.map((r: any) => JSON.stringify(r))
             : [];
 
-        // Update DB
+        // Update DB - mark as auto_need_outscraper if no emails found, otherwise auto_completed
+        const status = emails.length > 0 ? 'auto_completed' : 'auto_need_outscraper';
         const { error } = await supabase
             .from('email_scraper_node')
             .update({
-                status: 'auto_completed',
+                status: status,
                 emails: emails,
                 scrape_type: 'google_search',
                 updated_at: new Date().toISOString()

@@ -92,7 +92,7 @@ async function checkPendingJob(row: any): Promise<void> {
             await supabase
                 .from('email_scraper_node')
                 .update({
-                    status: 'auto_outscraper_completed',
+                    status: 'auto_completed',
                     emails: emails,
                     message: `Outscraper completed: ${emails.length} emails found`,
                     updated_at: new Date().toISOString()
@@ -247,7 +247,7 @@ async function processRow(row: any) {
                 await supabase
                     .from('email_scraper_node')
                     .update({
-                        status: 'auto_outscraper_completed',
+                        status: 'auto_completed',
                         emails: emails,
                         message: `Outscraper completed: ${emails.length} emails found`,
                         scrape_type: 'outscraper',
