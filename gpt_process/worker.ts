@@ -204,8 +204,8 @@ async function fetchAndClaimClientRecords(slots: number, includeErrors: boolean 
     // First try to get queued records
     let query = supabase
         .from('client_query_results')
-        .update({ gpt_process: 'processing' })
-        .eq('gpt_process', 'queued')
+        .update({ gpt_process: 'auto_processing' })
+        .eq('gpt_process', 'auto_queued')
         .order('id')
         .select('id, name, website, types, normalized_name')
         .limit(slots);
@@ -222,8 +222,8 @@ async function fetchAndClaimClientRecords(slots: number, includeErrors: boolean 
         debugLog('No queued records found. Checking for error records to retry...');
         const errorQuery = supabase
             .from('client_query_results')
-            .update({ gpt_process: 'processing' })
-            .eq('gpt_process', 'error')
+            .update({ gpt_process: 'auto_processing' })
+            .eq('gpt_process', 'auto_error')
             .order('id')
             .select('id, name, website, types, normalized_name')
             .limit(slots);

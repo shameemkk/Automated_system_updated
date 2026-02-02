@@ -317,7 +317,9 @@ async function mainLoop() {
     const { count: queuedCount, error: qErr } = await supabase
         .from('email_scraper_node')
         .select('*', { count: 'exact', head: true })
-        .eq('status', 'auto_completed');
+        .eq('status', 'auto_completed')
+        .eq('mode','auto')
+    
 
     if (qErr) {
         console.error("Startup check failed.", qErr);

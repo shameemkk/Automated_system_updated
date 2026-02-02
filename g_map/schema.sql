@@ -12,31 +12,234 @@ create table public.client_queries (
  created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- fetch all data
+
+create or replace function get_results_by_ids(query_ids int[])
+returns setof client_query_results
+language sql
+as $$
+  select *
+  from client_query_results
+  where client_query_id = any(query_ids);
+$$;
 
 
-create or replace function change_not_used_to_auto_queued(
-  p_client_tag text,
-  p_batch_size int
-)
-returns setof client_queries
+-- check 2nd schedule
+
+create or replace function check_bulk_gpt_status(query_ids int[])
+returns json
 language plpgsql
 as $$
+declare
+  pending_list int[];
 begin
-  return query
-  update client_queries
-  set status = 'auto_queued'
-  where id in (
-    select id
-    from client_queries
-    where client_tag = p_client_tag
-      and status = 'not_used'
-    order by created_at
-    limit p_batch_size
-    for update skip locked
-  )
-  returning *;
+  -- Find IDs that are "Pending"
+  -- An ID is pending if a row exists that matches ANY of these conditions:
+  -- 1. gpt_process is NOT 'auto_completed'
+  -- 2. gpt_process IS NULL
+  
+  select array_agg(distinct q_id)
+  into pending_list
+  from unnest(query_ids) as q_id
+  where exists (
+    select 1 
+    from client_query_results cqr 
+    where cqr.client_query_id = q_id 
+    and (
+       cqr.gpt_process != 'auto_completed' 
+       or cqr.gpt_process is null
+    )
+  );
+
+  -- Return Logic
+  if pending_list is null then
+    return json_build_object(
+      'status', 'completed',
+      'pending_ids', '[]'::json
+    );
+  else
+    return json_build_object(
+      'status', 'pending',
+      'pending_ids', pending_list
+    );
+  end if;
 end;
 $$;
+
+
+create or replace function check_automation_status(target_automation_id uuid)
+returns json
+language plpgsql
+as $$
+declare
+  has_pending_rows boolean;
+  rows_exist boolean;
+begin
+  -- 1. Check if any rows exist for this automation_id
+  -- (Optional: prevents returning 'completed' for an ID that doesn't exist)
+  select exists (
+    select 1 from client_queries where automation_id = target_automation_id
+  ) into rows_exist;
+
+  if not rows_exist then
+    return json_build_object('status', 'pending'); -- Or 'not_found' if you prefer
+  end if;
+
+  -- 2. Check if ANY row is NOT 'auto_completed'
+  select exists (
+    select 1 
+    from client_queries 
+    where automation_id = target_automation_id 
+    and status != 'auto_completed'
+  ) into has_pending_rows;
+
+  -- 3. Return Logic
+  if has_pending_rows then
+    return json_build_object('status', 'pending');
+  else
+    return json_build_object('status', 'completed');
+  end if;
+end;
+$$;
+
+
+
+
+
+
+--- change and add automation_id --last use
+-- select change_not_used_to_auto_queued('tag_A', p_batch_size, p_automation_id);
+create or replace function change_not_used_to_auto_queued(
+  p_client_tag text,
+  p_batch_size int,
+  p_automation_id bigint -- 1. Added new parameter
+)
+returns json
+language plpgsql
+as $$
+declare
+  v_result json;
+begin
+  with updated_rows as (
+    update client_queries
+    set 
+      status = 'auto_queued',
+      automation_id = p_automation_id -- 2. Update the automation_id column
+    where id in (
+      select q.id
+      from client_queries q
+      where q.client_tag = p_client_tag
+        and q.status = 'not_used'
+      order by q.created_at
+      limit p_batch_size
+      for update skip locked
+    )
+    returning id
+  )
+  select json_build_object(
+    'client_tag', p_client_tag,
+    'processing_ids', coalesce(array_agg(id::text), '{}'::text[])
+  ) into v_result
+  from updated_rows;
+
+  return v_result;
+end;
+$$;
+
+
+-- return all data 
+-- create or replace function change_not_used_to_auto_queued(
+--   p_client_tag text,
+--   p_batch_size int
+-- )
+-- returns setof client_queries
+-- language plpgsql
+-- as $$
+-- begin
+--   return query
+--   update client_queries
+--   set status = 'auto_queued'
+--   where id in (
+--     select id
+--     from client_queries
+--     where client_tag = p_client_tag
+--       and status = 'not_used'
+--     order by created_at
+--     limit p_batch_size
+--     for update skip locked
+--   )
+--   returning *;
+-- end;
+-- $$;
+
+-- get list of ids 
+-- {
+--   "client_tag": "tag_A",
+--   "processing_ids": ["101", "105"]
+-- }
+-- create or replace function change_not_used_to_auto_queued(
+--   p_client_tag text,
+--   p_batch_size int
+-- )
+-- returns json -- Returns a single JSON object
+-- language plpgsql
+-- as $$
+-- declare
+--   v_result json;
+-- begin
+--   with updated_rows as (
+--     update client_queries
+--     set status = 'auto_queued'
+--     where id in (
+--       select q.id
+--       from client_queries q
+--       where q.client_tag = p_client_tag
+--         and q.status = 'not_used'
+--       order by q.created_at
+--       limit p_batch_size
+--       for update skip locked
+--     )
+--     returning id
+--   )
+--   select json_build_object(
+--     'client_tag', p_client_tag,
+--     -- We cast ID to text (id::text) so the JSON output is ["1", "2"] 
+--     -- instead of [1, 2]. This is safer for JS clients consuming BigInts.
+--     'processing_ids', coalesce(array_agg(id::text), '{}'::text[])
+--   ) into v_result
+--   from updated_rows;
+
+--   return v_result;
+-- end;
+-- $$;
+
+
+-- all data return
+
+-- create or replace function change_not_used_to_auto_queued(
+--   p_client_tag text,
+--   p_batch_size int
+-- )
+-- returns setof client_queries
+-- language plpgsql
+-- as $$
+-- begin
+--   return query
+--   update client_queries
+--   set status = 'auto_queued'
+--   where id in (
+--     select id
+--     from client_queries
+--     where client_tag = p_client_tag
+--       and status = 'not_used'
+--     order by created_at
+--     limit p_batch_size
+--     for update skip locked
+--   )
+--   returning *;
+-- end;
+-- $$;
+
 
 create or replace function fetch_queries(
   p_batch_size int
