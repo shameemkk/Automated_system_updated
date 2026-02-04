@@ -225,6 +225,7 @@ async function processClientQuery(row: any) {
                 const allResults = businesses.map((biz: any) => ({
                     client_query_id: row.id,
                     client_tag: row.client_tag,
+                    automation_id: row.automation_id,
                     name: biz.name,
                     website: biz.website,
                     types: biz.types,
