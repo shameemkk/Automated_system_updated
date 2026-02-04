@@ -12,3 +12,39 @@ BEGIN
   LIMIT batch_size;
 END;
 $$ LANGUAGE plpgsql;
+
+
+-- for no emials to completed status (automation_process)
+create or replace function mark_outscraper_no_emails()
+returns void
+language plpgsql
+as $$
+begin
+  -- 1. Update email_scraper_node and capture the URLs that were changed
+  with updated_nodes as (
+    update public.email_scraper_node
+    set status = 'auto_final_completed'
+    where 
+      scrape_type = 'outscraper'
+      and mode = 'auto'
+      and status = 'auto_completed'
+      and (emails is null or cardinality(emails) = 0)
+    returning url -- Return the URL to pass to the next update
+  )
+  
+  -- 2. Update client_query_results using the URLs from the first step
+  update public.client_query_results as cqr
+  set 
+    gpt_process = 'auto_completed',
+    mode = 'auto_completed_noEmails'
+  from updated_nodes
+  where cqr.website = updated_nodes.url;
+end;
+$$;
+
+
+select cron.schedule(
+  'mark-no-emails-job', -- Unique name for the job
+  '*/5 * * * *',        -- Cron syntax (every 5 minutes)
+  'select mark_outscraper_no_emails();'
+);

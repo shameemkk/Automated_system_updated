@@ -14,15 +14,26 @@ create table public.client_queries (
 
 -- fetch all data
 
-create or replace function get_results_by_ids(query_ids int[])
-returns setof client_query_results
-language sql
-as $$
-  select *
-  from client_query_results
-  where client_query_id = any(query_ids);
-$$;
+-- create or replace function get_results_by_ids(query_ids int[])
+-- returns setof client_query_results
+-- language sql
+-- as $$
+--   select *
+--   from client_query_results
+--   where client_query_id = any(query_ids);
+-- $$;
 
+
+CREATE OR REPLACE FUNCTION get_results_by_automation_id(p_automation_id int)
+RETURNS SETOF client_query_results
+LANGUAGE sql
+AS $$
+  SELECT *
+  FROM client_query_results
+  WHERE automation_id = p_automation_id
+    AND gpt_process = 'auto_completed'  -- Corrected spelling here
+    AND mode = 'auto_email_verified';
+$$;
 
 -- check 2nd schedule
 
@@ -65,6 +76,44 @@ begin
   end if;
 end;
 $$;
+
+
+-- -- new function using id 
+-- CREATE OR REPLACE FUNCTION check_bulk_gpt_status(p_automation_id int)
+-- RETURNS json
+-- LANGUAGE plpgsql
+-- AS $$
+-- DECLARE
+--   pending_list int[];
+-- BEGIN
+--   -- Find client_query_ids associated with this automation_id that are "Pending"
+--   -- Condition: gpt_process is NOT 'auto_completed' OR is NULL
+  
+--   SELECT array_agg(client_query_id)
+--   INTO pending_list
+--   FROM client_query_results
+--   WHERE automation_id = p_automation_id
+--     AND (
+--        gpt_process != 'auto_completed' 
+--        OR gpt_process IS NULL
+--     );
+
+--   -- Return Logic
+--   IF pending_list IS NULL THEN
+--     RETURN json_build_object(
+--       'status', 'completed',
+--       'pending_ids', '[]'::json
+--     );
+--   ELSE
+--     RETURN json_build_object(
+--       'status', 'pending',
+--       'pending_ids', pending_list
+--     );
+--   END IF;
+-- END;
+-- $$;
+
+
 
 
 create or replace function check_automation_status(target_automation_id uuid)
