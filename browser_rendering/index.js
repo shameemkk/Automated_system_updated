@@ -390,7 +390,8 @@ function normalizeResponse(result) {
     // If error is timeout or connection issue, mark as auto_need_google_search (recoverable)
     const isRecoverable = isRecoverableError(errorMsg);
     return { 
-      status: isRecoverable ? 'auto_need_google_search' : 'auto_error', 
+      // status: isRecoverable ? 'auto_need_google_search' : 'auto_error', -- need futre update or fix issue
+      status: 'auto_need_google_search' , 
       emails: [], 
       facebook_urls: [], 
       message: errorMsg, 
