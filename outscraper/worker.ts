@@ -95,6 +95,7 @@ async function checkPendingJob(row: any): Promise<void> {
                     status: 'auto_completed',
                     emails: emails,
                     message: `Outscraper completed: ${emails.length} emails found`,
+                    scrape_type: 'outscraper',
                     updated_at: new Date().toISOString()
                 })
                 .eq('id', row.id);
@@ -140,6 +141,7 @@ async function checkPendingJob(row: any): Promise<void> {
                 status: 'outscraper_error',
                 message: errorMessage,
                 retry_count: (row.retry_count || 0) + 1,
+                scrape_type: 'outscraper',
                 updated_at: new Date().toISOString()
             })
             .eq('id', row.id);
@@ -227,6 +229,7 @@ async function processRow(row: any) {
             .update({
                 status: 'outscraper_pending',
                 message: `Outscraper request initiated: ${requestId}`,
+                scrape_type: 'outscraper',
                 updated_at: new Date().toISOString()
             })
             .eq('id', row.id);
@@ -311,7 +314,6 @@ async function fetchAndClaim(slots: number): Promise<any[]> {
         .from('email_scraper_node')
         .select('*')
         .eq('status', 'auto_need_outscraper')
-        .eq('scrape_type', 'outscraper')
         .order('created_at', { ascending: true })
         .limit(slots);
 
@@ -330,6 +332,7 @@ async function fetchAndClaim(slots: number): Promise<any[]> {
         .from('email_scraper_node')
         .update({
             status: 'auto_processing',
+            scrape_type: 'outscraper',
             updated_at: new Date().toISOString()
         })
         .in('id', ids);
@@ -356,8 +359,7 @@ async function mainLoop() {
     const { count: queuedCount, error: qErr } = await supabase
         .from('email_scraper_node')
         .select('*', { count: 'exact', head: true })
-        .eq('status', 'auto_need_outscraper')
-        .eq('scrape_type', 'outscraper');
+        .eq('status', 'auto_need_outscraper');
 
     if (qErr) {
         console.error("Startup check failed.", qErr);
@@ -397,7 +399,6 @@ async function mainLoop() {
                                 .from('email_scraper_node')
                                 .select('*')
                                 .eq('status', 'outscraper_error')
-                                .eq('scrape_type', 'outscraper')
                                 .lt('retry_count', 3)
                                 .order('updated_at', { ascending: true })
                                 .limit(slotsAvailable);
@@ -409,6 +410,7 @@ async function mainLoop() {
                                     .update({ 
                                         status: 'auto_need_outscraper', 
                                         message: 'Retrying after error',
+                                        scrape_type: 'outscraper',
                                         updated_at: new Date().toISOString() 
                                     })
                                     .in('id', ids);
