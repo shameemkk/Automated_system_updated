@@ -226,10 +226,8 @@ async function processRow(row: any) {
             }
         }
 
-        // Update client_query_results with verified emails if we have any
-        if (verifiedEmails.length > 0 && row.url) {
-            console.log(`Row ${row.record_id}: Adding ${verifiedEmails.length} verified emails to client_query_results`);
-            
+        // Update client_query_results based on verification results
+        if (row.url) {
             // Find matching client_query_results by full URL
             const { data: matchingResults, error: findError } = await supabase
                 .from('client_query_results')
@@ -242,24 +240,45 @@ async function processRow(row: any) {
             } else if (matchingResults && matchingResults.length > 0) {
                 const clientResult = matchingResults[0];
                 
-                // Merge with existing verified emails (avoid duplicates)
-                const existingEmails = clientResult.verified_emails || [];
-                const allVerifiedEmails = [...new Set([...existingEmails, ...verifiedEmails])];
+                if (verifiedEmails.length > 0) {
+                    console.log(`Row ${row.record_id}: Adding ${verifiedEmails.length} verified emails to client_query_results`);
+                    
+                    // Merge with existing verified emails (avoid duplicates)
+                    const existingEmails = clientResult.verified_emails || [];
+                    const allVerifiedEmails = [...new Set([...existingEmails, ...verifiedEmails])];
 
-                // Update client_query_results
-                const { error: updateError } = await supabase
-                    .from('client_query_results')
-                    .update({ 
-                        verified_emails: allVerifiedEmails,
-                        mode: 'auto_email_verified',
-                        gpt_process : 'auto_queued'
-                    })
-                    .eq('id', clientResult.id);
+                    // Update client_query_results with verified emails
+                    const { error: updateError } = await supabase
+                        .from('client_query_results')
+                        .update({ 
+                            verified_emails: allVerifiedEmails,
+                            mode: 'auto_email_verified',
+                            gpt_process: 'auto_queued'
+                        })
+                        .eq('id', clientResult.id);
 
-                if (updateError) {
-                    console.error(`Row ${row.record_id}: Error updating client_query_results:`, updateError);
+                    if (updateError) {
+                        console.error(`Row ${row.record_id}: Error updating client_query_results:`, updateError);
+                    } else {
+                        console.log(`Row ${row.record_id}: Successfully updated client_query_results (${clientResult.id}) with ${verifiedEmails.length} new verified emails`);
+                    }
                 } else {
-                    console.log(`Row ${row.record_id}: Successfully updated client_query_results (${clientResult.id}) with ${verifiedEmails.length} new verified emails`);
+                    console.log(`Row ${row.record_id}: No verified emails found - updating client_query_results with no valid emails status`);
+                    
+                    // Update client_query_results when no verified emails found
+                    const { error: updateError } = await supabase
+                        .from('client_query_results')
+                        .update({ 
+                            mode: 'auto_completed_no_valid_emails',
+                            gpt_process: 'auto_completed'
+                        })
+                        .eq('id', clientResult.id);
+
+                    if (updateError) {
+                        console.error(`Row ${row.record_id}: Error updating client_query_results for no valid emails:`, updateError);
+                    } else {
+                        console.log(`Row ${row.record_id}: Successfully updated client_query_results (${clientResult.id}) with no valid emails status`);
+                    }
                 }
             } else {
                 console.log(`Row ${row.record_id}: No matching client_query_results found for URL: ${row.url}`);
