@@ -371,24 +371,24 @@ let shuttingDown = false;
 const stats = { processed: 0, errors: 0, active: 0 };
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-function isRecoverableError(errorMsg) {
-  const lowerMsg = errorMsg.toLowerCase();
-  return lowerMsg.includes('timeout') ||
-    lowerMsg.includes('err_connection') ||
-    lowerMsg.includes('err_name_not_resolved') ||
-    lowerMsg.includes('err_ssl') ||
-    lowerMsg.includes('err_cert') ||
-    lowerMsg.includes('net::err_') ||
-    lowerMsg.includes('econnrefused') ||
-    lowerMsg.includes('enotfound') ||
-    lowerMsg.includes('econnreset');
-}
+// function isRecoverableError(errorMsg) {
+//   const lowerMsg = errorMsg.toLowerCase();
+//   return lowerMsg.includes('timeout') ||
+//     lowerMsg.includes('err_connection') ||
+//     lowerMsg.includes('err_name_not_resolved') ||
+//     lowerMsg.includes('err_ssl') ||
+//     lowerMsg.includes('err_cert') ||
+//     lowerMsg.includes('net::err_') ||
+//     lowerMsg.includes('econnrefused') ||
+//     lowerMsg.includes('enotfound') ||
+//     lowerMsg.includes('econnreset');
+// }
 
 function normalizeResponse(result) {
   if (!result.success) {
     const errorMsg = result.errors?.[0]?.error || 'Scrape failed';
     // If error is timeout or connection issue, mark as auto_need_google_search (recoverable)
-    const isRecoverable = isRecoverableError(errorMsg);
+    // const isRecoverable = isRecoverableError(errorMsg);
     return { 
       // status: isRecoverable ? 'auto_need_google_search' : 'auto_error', -- need futre update or fix issue
       status: 'auto_need_google_search' , 
@@ -440,11 +440,12 @@ async function processRow(row) {
   } catch (err) {
     stats.errors++;
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    const isRecoverable = isRecoverableError(errorMessage);
+    // const isRecoverable = isRecoverableError(errorMessage); // 
     await supabase
       .from('email_scraper_node')
       .update({ 
-        status: isRecoverable ? 'auto_need_google_search' : 'auto_error', 
+        // status: isRecoverable ? 'auto_need_google_search' : 'auto_error', 
+        status: 'auto_need_google_search', 
         message: errorMessage, 
         scrape_type: 'browser_rendering', 
         updated_at: new Date().toISOString() 
