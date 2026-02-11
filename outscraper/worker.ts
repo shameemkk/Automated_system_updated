@@ -49,17 +49,47 @@ let shuttingDown = false;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Basic email regex: local@domain.tld (no consecutive dots, no query params)
+const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
+
+function normalizeAndValidateEmail(raw: string): string | null {
+    if (!raw || typeof raw !== 'string') return null;
+    let s = raw.trim();
+    if (!s) return null;
+
+    // Strip mailto: prefix if present
+    if (s.toLowerCase().startsWith('mailto:')) {
+        s = s.slice(7).trim();
+    }
+    // Strip query string (?subject=, ?body=, etc.)
+    const qIdx = s.indexOf('?');
+    if (qIdx !== -1) s = s.slice(0, qIdx).trim();
+    // Take only the part before common delimiters (e.g. "email  |  TDLR #C2515")
+    const pipeIdx = s.indexOf('|');
+    if (pipeIdx !== -1) s = s.slice(0, pipeIdx).trim();
+    s = s.trim().toLowerCase();
+    if (!s) return null;
+
+    // Reject invalid patterns
+    if (/\.\./.test(s)) return null;           // consecutive dots (e.g. co.hays..tx.us)
+    if (/[?#&%]/.test(s)) return null;         // leftover query/encoded chars
+    if (!EMAIL_REGEX.test(s)) return null;
+
+    return s;
+}
+
 // Extract emails from Outscraper API response
 function extractEmails(data: any): string[] {
     const emails: Set<string> = new Set();
-    
+
     if (!data || !Array.isArray(data)) return [];
 
     for (const item of data) {
         if (item.emails && Array.isArray(item.emails)) {
             for (const emailObj of item.emails) {
                 if (emailObj.value && typeof emailObj.value === 'string') {
-                    emails.add(emailObj.value.toLowerCase());
+                    const cleaned = normalizeAndValidateEmail(emailObj.value);
+                    if (cleaned) emails.add(cleaned);
                 }
             }
         }
@@ -96,18 +126,18 @@ async function checkPendingJob(row: any): Promise<void> {
                     emails: emails,
                     message: `Outscraper completed: ${emails.length} emails found`,
                     scrape_type: 'outscraper',
-                    updated_at: new Date().toISOString()
+                    
                 })
                 .eq('id', row.id);
 
             stats.processed++;
             stats.pending--;
         } else if (statusResponse.status === 'Pending') {
-            // Still outscraper_pending, update timestamp to avoid re-checking too soon
+            // Still in outscraper_pending. mark pending, The timestamp will be automatically updated in the database to prevent re-checking too soon.
             await supabase
                 .from('email_scraper_node')
                 .update({
-                    updated_at: new Date().toISOString()
+                    status: 'outscraper_pending'
                 })
                 .eq('id', row.id);
             
@@ -142,7 +172,7 @@ async function checkPendingJob(row: any): Promise<void> {
                 message: errorMessage,
                 retry_count: (row.retry_count || 0) + 1,
                 scrape_type: 'outscraper',
-                updated_at: new Date().toISOString()
+                
             })
             .eq('id', row.id);
     } finally {
@@ -230,7 +260,7 @@ async function processRow(row: any) {
                 status: 'outscraper_pending',
                 message: `Outscraper request initiated: ${requestId}`,
                 scrape_type: 'outscraper',
-                updated_at: new Date().toISOString()
+                
             })
             .eq('id', row.id);
 
@@ -254,7 +284,7 @@ async function processRow(row: any) {
                         emails: emails,
                         message: `Outscraper completed: ${emails.length} emails found`,
                         scrape_type: 'outscraper',
-                        updated_at: new Date().toISOString()
+                        
                     })
                     .eq('id', row.id);
 
@@ -295,7 +325,7 @@ async function processRow(row: any) {
                 message: errorMessage,
                 retry_count: (row.retry_count || 0) + 1,
                 scrape_type: 'outscraper',
-                updated_at: new Date().toISOString()
+                
             })
             .eq('id', row.id);
 
@@ -333,7 +363,7 @@ async function fetchAndClaim(slots: number): Promise<any[]> {
         .update({
             status: 'auto_processing',
             scrape_type: 'outscraper',
-            updated_at: new Date().toISOString()
+            
         })
         .in('id', ids);
 
@@ -411,7 +441,7 @@ async function mainLoop() {
                                         status: 'auto_need_outscraper', 
                                         message: 'Retrying after error',
                                         scrape_type: 'outscraper',
-                                        updated_at: new Date().toISOString() 
+                                        
                                     })
                                     .in('id', ids);
                                 console.log(`♻️ Re-queued ${errorJobs.length} outscraper_error jobs for retry.`);
