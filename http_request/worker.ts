@@ -25,6 +25,22 @@ const stats = {
     queuedInDb: 0
 };
 
+// Batch update types and buffer
+interface PendingUpdate {
+    id: number;
+    status: string;
+    emails: string[];
+    facebook_urls: string[];
+    message: string | null;
+    needs_browser_rendering: boolean;
+    _flushRetries?: number;  // Track how many times this update failed to flush
+}
+
+const pendingUpdates: PendingUpdate[] = [];
+const BATCH_FLUSH_INTERVAL_MS = parseInt(process.env.BATCH_FLUSH_INTERVAL_MS || '10000', 10);  // Flush every 10 seconds
+const BATCH_FLUSH_SIZE = parseInt(process.env.BATCH_FLUSH_SIZE || '25', 10);           // Or when buffer reaches this size
+const BATCH_MAX_FLUSH_RETRIES = 3;  // Max times a failed update is re-queued before dropping
+
 // Supabase Client
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
     auth: {
@@ -79,6 +95,56 @@ async function retryDbOperation<T>(operation: () => Promise<T>, maxRetries = 3):
     throw new Error('Max retries exceeded');
 }
 
+// --- BATCH UPDATE LOGIC ---
+
+async function flushBatchUpdates(): Promise<void> {
+    if (pendingUpdates.length === 0) return;
+
+    // Atomically take all pending updates
+    const batch = pendingUpdates.splice(0);
+
+    try {
+        const { error } = await retryDbOperation(async () => {
+            return await supabase.rpc('auto_batch_update_email_scraper_nodes', {
+                updates: batch
+            });
+        });
+
+        if (error) {
+            console.error(`[Worker] Batch update failed for ${batch.length} rows:`, error);
+            requeueFailedBatch(batch);
+        } else {
+            console.log(`[Worker] Batch updated ${batch.length} rows`);
+        }
+    } catch (err) {
+        console.error(`[Worker] Batch update exception for ${batch.length} rows:`, err);
+        requeueFailedBatch(batch);
+    }
+}
+
+function requeueFailedBatch(batch: PendingUpdate[]): void {
+    const retriable: PendingUpdate[] = [];
+    const dropped: PendingUpdate[] = [];
+
+    for (const update of batch) {
+        const retries = (update._flushRetries || 0) + 1;
+        if (retries < BATCH_MAX_FLUSH_RETRIES) {
+            retriable.push({ ...update, _flushRetries: retries });
+        } else {
+            dropped.push(update);
+        }
+    }
+
+    if (retriable.length > 0) {
+        pendingUpdates.push(...retriable);
+        console.warn(`[Worker] Re-queued ${retriable.length} updates for retry (attempt ${retriable[0]._flushRetries}/${BATCH_MAX_FLUSH_RETRIES})`);
+    }
+
+    if (dropped.length > 0) {
+        console.error(`[Worker] Dropped ${dropped.length} updates after ${BATCH_MAX_FLUSH_RETRIES} failed flush attempts. IDs: ${dropped.map(u => u.id).join(', ')}`);
+    }
+}
+
 // --- CORE WORKER LOGIC ---
 
 async function processRow(row: any) {
@@ -112,28 +178,25 @@ async function processRow(row: any) {
             finalStatus = normalized.status;
         }
 
-        // Update DB using Supabase ORM with retry
-        const { error } = await retryDbOperation(async () => {
-            return await supabase
-                .from('email_scraper_node')
-                .update({
-                    status: finalStatus,
-                    emails: normalized.emails,
-                    facebook_urls: normalized.facebook_urls,
-                    message: normalized.message,
-                    needs_browser_rendering: normalized.needs_browser_rendering,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('id', row.id);
+        // Push to batch buffer instead of individual DB update
+        pendingUpdates.push({
+            id: row.id,
+            status: finalStatus,
+            emails: normalized.emails,
+            facebook_urls: normalized.facebook_urls,
+            message: normalized.message,
+            needs_browser_rendering: normalized.needs_browser_rendering
         });
 
-        if (error) {
-            console.error(`[Worker] DB update failed for job ${row.id}:`, error);
-            stats.errors++;
-        } else if (normalized.status === 'auto_error') {
+        if (normalized.status === 'auto_error') {
             stats.errors++;
         } else {
             stats.processed++;
+        }
+
+        // Flush if batch is large enough
+        if (pendingUpdates.length >= BATCH_FLUSH_SIZE) {
+            await flushBatchUpdates();
         }
 
     } catch (err: any) {
@@ -143,26 +206,25 @@ async function processRow(row: any) {
             errorMessage = err.message;
         }
 
-        // Error Update - log if this fails too
-        const { error: updateError } = await retryDbOperation(async () => {
-            return await supabase
-                .from('email_scraper_node')
-                .update({
-                    status: 'auto_error',
-                    message: errorMessage,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('id', row.id);
-        }).catch(err => ({ error: err }));
+        // Push error to batch buffer
+        pendingUpdates.push({
+            id: row.id,
+            status: 'auto_error',
+            emails: [],
+            facebook_urls: [],
+            message: errorMessage,
+            needs_browser_rendering: false
+        });
 
-        if (updateError) {
-            console.error(`[Worker] Failed to update error status for job ${row.id}:`, updateError);
+        // Flush if batch is large enough
+        if (pendingUpdates.length >= BATCH_FLUSH_SIZE) {
+            await flushBatchUpdates();
         }
 
     } finally {
         stats.active--;
         const duration = Date.now() - start;
-        console.log(`[Worker] Job ${row.id} finished in ${duration}ms (Active: ${stats.active})`);
+        console.log(`[Worker] Job ${row.id} finished in ${duration}ms (Active: ${stats.active}, Pending: ${pendingUpdates.length})`);
     }
 }
 
@@ -191,6 +253,12 @@ async function mainLoop() {
     const maxBackoff = 60000;
 
     console.log(`Starting Supabase worker with max concurrency: ${MAX_CONCURRENCY}`);
+    console.log(`Batch update: flush every ${BATCH_FLUSH_INTERVAL_MS}ms or every ${BATCH_FLUSH_SIZE} items`);
+
+    // Start periodic batch flush timer
+    const flushInterval = setInterval(() => {
+        flushBatchUpdates().catch(err => console.error('[Worker] Periodic flush error:', err));
+    }, BATCH_FLUSH_INTERVAL_MS);
 
     // Startup Check - only count http_request scrape_type
     const { count: queuedCount, error: qErr } = await supabase
@@ -272,6 +340,11 @@ async function gracefulShutdown(signal: string) {
     shuttingDown = true;
     console.log('Waiting for active jobs to complete...');
     await queue.onIdle();
+    // Flush any remaining batch updates before exit
+    if (pendingUpdates.length > 0) {
+        console.log(`Flushing ${pendingUpdates.length} remaining batch updates...`);
+        await flushBatchUpdates();
+    }
     console.log('Goodbye.');
     process.exit(0);
 }

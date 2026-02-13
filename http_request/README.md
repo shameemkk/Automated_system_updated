@@ -1,5 +1,11 @@
 # HTTP Request Worker
 
+## Recent changes
+
+- **Batch DB updates**: Results are buffered in memory and written to Supabase in batches via RPC `auto_batch_update_email_scraper_nodes` instead of one update per job. Reduces connection/rate-limit errors.
+- **Flush policy**: Batch is flushed every `BATCH_FLUSH_INTERVAL_MS` (default 10s) or when buffer size reaches `BATCH_FLUSH_SIZE` (default 25). Remaining buffer is flushed on graceful shutdown.
+- **RPC failure handling**: If a batch RPC fails, updates are re-queued for up to 3 flush attempts; after that they are dropped and their IDs are logged.
+
 ## Overview
 The HTTP Request Worker is the first stage in the email scraping pipeline. It performs fast HTTP-based scraping of websites to extract emails and Facebook URLs without using a browser.
 

@@ -55,6 +55,34 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- RPC Function for batch updating rows (reduces individual update calls)
+CREATE OR REPLACE FUNCTION auto_batch_update_email_scraper_nodes(updates JSONB)
+RETURNS INT AS $$
+DECLARE
+  total_affected INT := 0;
+  row_affected INT;
+  u JSONB;
+BEGIN
+  FOR u IN SELECT value FROM jsonb_array_elements(updates)
+  LOOP
+    UPDATE public.email_scraper_node
+    SET
+      status = (u->>'status')::text,
+      emails = ARRAY(SELECT jsonb_array_elements_text(COALESCE(u->'emails', '[]'::jsonb))),
+      facebook_urls = ARRAY(SELECT jsonb_array_elements_text(COALESCE(u->'facebook_urls', '[]'::jsonb))),
+      message = (u->>'message')::text,
+      needs_browser_rendering = COALESCE((u->>'needs_browser_rendering')::boolean, false),
+      updated_at = NOW()
+    WHERE id = (u->>'id')::bigint;
+
+    GET DIAGNOSTICS row_affected = ROW_COUNT;
+    total_affected := total_affected + row_affected;
+  END LOOP;
+
+  RETURN total_affected;
+END;
+$$ LANGUAGE plpgsql;
+
 -- RPC Function to retry error jobs (only http_request scrape_type)
 CREATE OR REPLACE FUNCTION auto_retry_error_jobs_http_request()
 RETURNS INT AS $$
