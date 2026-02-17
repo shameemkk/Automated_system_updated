@@ -1,0 +1,5 @@
+scrapy>=2.7
+scrapy-playwright>=0.0.38
+playwright>=1.40
+supabase>=2.0
+python-dotenv>=1.0
