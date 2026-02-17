@@ -61,11 +61,11 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
  * Called at startup and when new client_tags are encountered
  * Protected by mutex to prevent concurrent refreshes
  */
-async function loadClientZipCodes() {
-    console.log('Loading client ZIP codes from client_details...');
+async function loadClientZipCodesFormat() {
+    console.log('Loading client ZIP codes format from client_details...');
     const { data, error } = await supabase
         .from('client_details')
-        .select('client_tag, zip_codes');
+        .select('client_tag, zip_codes_format');
 
     if (error) {
         console.error('Error loading client_details:', error);
@@ -81,7 +81,7 @@ async function loadClientZipCodes() {
     clientZipCodesCache.clear();
     
     for (const row of data) {
-        const zipSet = new Set<string>(row.zip_codes || []);
+        const zipSet = new Set<string>(row.zip_codes_format || []);
         clientZipCodesCache.set(row.client_tag, zipSet);
     }
 
@@ -105,7 +105,7 @@ async function safeRefreshCache(): Promise<void> {
     isRefreshing = true;
     
     try {
-        await loadClientZipCodes();
+        await loadClientZipCodesFormat();
     } finally {
         // Release lock and notify all waiters
         isRefreshing = false;
@@ -115,29 +115,29 @@ async function safeRefreshCache(): Promise<void> {
 }
 
 /**
- * Check if a ZIP code is allowed for a given client_tag
- * Returns true if allowed, false otherwise
+ * Check if full_address contains any of the client_tag's allowed zip codes format
+ * Returns true if (full_address?.toLowerCase() || "").includes(k) for any k in client's zip list
  * Refreshes all client_tags if the requested one is not in cache (thread-safe)
  */
-async function isZipCodeAllowed(clientTag: string, zipCode: string | null): Promise<boolean> {
-    if (!zipCode) return false;
-    
+async function isZipCodeFormatAllowed(clientTag: string, fullAddress: string | null): Promise<boolean> {
+    const fullAddressLowercase = (fullAddress?.toLowerCase() || "");
+    if (!fullAddressLowercase) return false;
+
     let allowedZips = clientZipCodesCache.get(clientTag);
-    
+
     // If client_tag not in cache, refresh all client_tags (thread-safe)
     if (!allowedZips) {
         console.log(`Client tag '${clientTag}' not found in cache. Refreshing all client_tags...`);
         await safeRefreshCache();
-        
-        // Check again after refresh
+
         allowedZips = clientZipCodesCache.get(clientTag);
         if (!allowedZips) {
             console.warn(`Client tag '${clientTag}' not found in client_details after refresh.`);
             return false;
         }
     }
-    
-    return allowedZips.has(zipCode);
+
+    return [...allowedZips].some((k) => fullAddressLowercase.includes(k));
 }
 
 /**
@@ -241,11 +241,11 @@ async function processClientQuery(row: any) {
                     processed: true,
                 }));
 
-                // Filter results asynchronously with ZIP code check
+                // Filter results: keep only if full_address includes a client-allowed zip and has website
                 const results: any[] = [];
                 for (const r of allResults) {
-                    if (r.zip_code !== null && r.website !== null) {
-                        const allowed = await isZipCodeAllowed(row.client_tag, r.zip_code);
+                    if (r.website !== null) {
+                        const allowed = await isZipCodeFormatAllowed(row.client_tag, r.full_address);
                         if (allowed) {
                             results.push(r);
                         }
@@ -332,7 +332,7 @@ async function mainLoop() {
     console.log(`Starting Supabase worker with max concurrency: ${MAX_CONCURRENCY}`);
 
     // Load client ZIP codes once at startup
-    await loadClientZipCodes();
+    await loadClientZipCodesFormat();
 
     // Startup Check
     const { count: queuedCount, error: qErr } = await supabase

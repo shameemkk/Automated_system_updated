@@ -13,7 +13,7 @@ This worker processes location-based queries from the `client_queries` table, fe
 Stores ZIP code filters for each client.
 ```sql
 - client_tag: text (unique identifier for client)
-- zip_codes: text[] (array of allowed ZIP codes)
+- zip_codes_format: text[] (array of allowed ZIP codes)
 ```
 
 #### `client_queries`
@@ -67,7 +67,7 @@ Filtered business results.
 
 3. **Load ZIP Code Cache**
    - Fetches all records from `client_details` table
-   - Builds in-memory cache: `Map<client_tag, Set<zip_codes>>`
+   - Builds in-memory cache: `Map<client_tag, Set<zip_codes_format>>`
    - Logs number of client tags loaded
 
 4. **Startup Health Check**
@@ -152,7 +152,7 @@ Uses regex patterns to extract ZIP codes from address:
 For each result:
   1. Check if zip_code is not null
   2. Check if website is not null
-  3. Call isZipCodeAllowed(client_tag, zip_code)
+  3. Call isZipCodeFormatAllowed(client_tag, zip_code)
      - If client_tag not in cache:
        a. Acquire mutex lock (prevents concurrent refreshes)
        b. Refresh entire cache from client_details table
@@ -394,7 +394,7 @@ DEBUG=false                # Enable debug logging
 ### Setup
 1. Insert client ZIP codes:
 ```sql
-INSERT INTO client_details (client_tag, zip_codes)
+INSERT INTO client_details (client_tag, zip_codes_format)
 VALUES ('client_a', ARRAY['10001', '10002', '10003']);
 ```
 
@@ -469,7 +469,7 @@ Logs full API responses for troubleshooting.
 **Cause:** Client ZIP codes not configured
 **Solution:** 
 ```sql
-INSERT INTO client_details (client_tag, zip_codes)
+INSERT INTO client_details (client_tag, zip_codes_format)
 VALUES ('your_client', ARRAY['12345', '67890']);
 ```
 
