@@ -136,8 +136,7 @@ async function isZipCodeFormatAllowed(clientTag: string, fullAddress: string | n
             return false;
         }
     }
-
-    return [...allowedZips].some((k) => fullAddressLowercase.includes(k));
+    return [...allowedZips].some((k) => fullAddressLowercase.includes(String(k).toLowerCase()));
 }
 
 /**
@@ -273,7 +272,7 @@ async function processClientQuery(row: any) {
 
                         // Ignore unique constraint violation (code 23505), throw other errors
                         if (insertError && insertError.code !== '23505') {
-                            throw insertError;
+                            throw insertError;                
                         }
                         console.log("insertError:", insertError);
                     }
