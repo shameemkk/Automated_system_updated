@@ -41,7 +41,9 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
 });
 
 // Cache for client ZIP codes - fetched once at startup
-const clientZipCodesCache = new Map<string, Set<string>>();
+// null value = "accept all" sentinel (client has no zip filter configured).
+// Absent key = not yet loaded, needs refresh.
+const clientZipCodesCache = new Map<string, Set<string> | null>();
 
 // Mutex to prevent concurrent cache refreshes
 let isRefreshing = false;
@@ -81,8 +83,13 @@ async function loadClientZipCodesFormat() {
     clientZipCodesCache.clear();
     
     for (const row of data) {
-        const zipSet = new Set<string>(row.zip_codes_format || []);
-        clientZipCodesCache.set(row.client_tag, zipSet);
+        const zips = row.zip_codes_format;
+        if (!zips || zips.length === 0) {
+            // No filter configured → accept all rows for this client
+            clientZipCodesCache.set(row.client_tag, null);
+        } else {
+            clientZipCodesCache.set(row.client_tag, new Set<string>(zips));
+        }
     }
 
     console.log(`Loaded ZIP codes for ${clientZipCodesCache.size} client tags.`);
@@ -120,22 +127,26 @@ async function safeRefreshCache(): Promise<void> {
  * Refreshes all client_tags if the requested one is not in cache (thread-safe)
  */
 async function isZipCodeFormatAllowed(clientTag: string, fullAddress: string | null): Promise<boolean> {
-    const fullAddressLowercase = (fullAddress?.toLowerCase() || "");
-    if (!fullAddressLowercase) return false;
-
-    let allowedZips = clientZipCodesCache.get(clientTag);
-
-    // If client_tag not in cache, refresh all client_tags (thread-safe)
-    if (!allowedZips) {
+    // Use .has() so a cached `null` (accept-all sentinel) is NOT mistaken for "missing".
+    if (!clientZipCodesCache.has(clientTag)) {
         console.log(`Client tag '${clientTag}' not found in cache. Refreshing all client_tags...`);
         await safeRefreshCache();
 
-        allowedZips = clientZipCodesCache.get(clientTag);
-        if (!allowedZips) {
+        if (!clientZipCodesCache.has(clientTag)) {
             console.warn(`Client tag '${clientTag}' not found in client_details after refresh.`);
             return false;
         }
     }
+
+    // Safe cast: .has() confirmed the key exists.
+    const allowedZips = clientZipCodesCache.get(clientTag) as Set<string> | null;
+
+    // null sentinel = no zip filter configured → accept all rows
+    if (allowedZips === null) return true;
+
+    const fullAddressLowercase = (fullAddress?.toLowerCase() || "");
+    if (!fullAddressLowercase) return false;
+
     return [...allowedZips].some((k) => fullAddressLowercase.includes(String(k).toLowerCase()));
 }
 
