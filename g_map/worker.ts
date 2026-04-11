@@ -205,30 +205,48 @@ async function processClientQuery(row: any) {
         // Uncomment below if rate limiting is needed:
         // await sleep(API_CALL_DELAY);
 
-        const response = await axios.get(EXTERNAL_API_URL, {
-            params: {
-                query: row.query,
-                lat: row.latitude,
-                lng: row.longitude,
-                country: row.region,
-                lang: 'en',
-                limit: 0,
-                offset: 0,
-                zoom: 12
-            },
-            headers: {
-                'scraper-key': SCRAPER_API_KEY
-            },
-            timeout: EXTERNAL_API_TIMEOUT
-        });
-       
-        const apiResponse = response.data;
-        if (DEBUG) {
-            console.log(apiResponse)     
-        }   
+        const MAX_ATTEMPTS = 3; // 1 initial + 2 retries on empty results
+        let apiResponse: any;
+        let businesses: any[] = [];
+
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            const response = await axios.get(EXTERNAL_API_URL, {
+                params: {
+                    query: row.query,
+                    lat: row.latitude,
+                    lng: row.longitude,
+                    country: row.region,
+                    lang: 'en',
+                    limit: 0,
+                    offset: 0,
+                    zoom: 12
+                },
+                headers: {
+                    'scraper-key': SCRAPER_API_KEY
+                },
+                timeout: EXTERNAL_API_TIMEOUT
+            });
+
+            apiResponse = response.data;
+            if (DEBUG) {
+                console.log(apiResponse)
+            }
+
+            // Non-ok status is a hard failure — break and let the existing throw below handle it.
+            if (apiResponse?.status !== 'ok') break;
+
+            businesses = apiResponse.data || [];
+            if (businesses.length > 0) break;
+
+            // Empty result — retry if we still have attempts left.
+            if (attempt < MAX_ATTEMPTS) {
+                console.log(`[Worker] ClientQuery ${row.id} returned 0 results (attempt ${attempt}/${MAX_ATTEMPTS}). Retrying in 500ms...`);
+                await sleep(500);
+            }
+        }
+
         // Check if API returned success
         if (apiResponse?.status === 'ok') {
-            const businesses = apiResponse.data || [];
 
             // Insert results into client_query_results
             if (businesses.length > 0) {
