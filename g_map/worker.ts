@@ -40,10 +40,14 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
     }
 });
 
-// Cache for client ZIP codes - fetched once at startup
-// null value = "accept all" sentinel (client has no zip filter configured).
-// Absent key = not yet loaded, needs refresh.
-const clientZipCodesCache = new Map<string, Set<string> | null>();
+// Cache for per-client filters (zip codes + allowed types) - fetched once at startup.
+// Each field's `null` value = "accept all" sentinel (client has no filter configured for that field).
+// Absent map key = client_tag not yet loaded, needs refresh.
+type ClientFilter = {
+    zips: Set<string> | null;   // null = no zip filter -> accept all
+    types: Set<string> | null;  // null = no type filter -> accept all (lowercased entries)
+};
+const clientFiltersCache = new Map<string, ClientFilter>();
 
 // Mutex to prevent concurrent cache refreshes
 let isRefreshing = false;
@@ -59,15 +63,15 @@ let shuttingDown = false;
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Fetch all client_details and populate the ZIP code cache
- * Called at startup and when new client_tags are encountered
- * Protected by mutex to prevent concurrent refreshes
+ * Fetch all client_details and populate the filter cache (zips + allowed types).
+ * Called at startup and when new client_tags are encountered.
+ * Protected by mutex to prevent concurrent refreshes.
  */
-async function loadClientZipCodesFormat() {
-    console.log('Loading client ZIP codes format from client_details...');
+async function loadClientFilters() {
+    console.log('Loading client filters (zips + types) from client_details...');
     const { data, error } = await supabase
         .from('client_details')
-        .select('client_tag, zip_codes_format');
+        .select('client_tag, zip_codes_format, allowed_types');
 
     if (error) {
         console.error('Error loading client_details:', error);
@@ -80,19 +84,25 @@ async function loadClientZipCodesFormat() {
     }
 
     // Clear existing cache and reload all
-    clientZipCodesCache.clear();
-    
+    clientFiltersCache.clear();
+
     for (const row of data) {
-        const zips = row.zip_codes_format;
-        if (!zips || zips.length === 0) {
-            // No filter configured → accept all rows for this client
-            clientZipCodesCache.set(row.client_tag, null);
-        } else {
-            clientZipCodesCache.set(row.client_tag, new Set<string>(zips));
-        }
+        const zipsRaw = row.zip_codes_format;
+        const typesRaw = row.allowed_types;
+
+        const zips: Set<string> | null =
+            !zipsRaw || zipsRaw.length === 0 ? null : new Set<string>(zipsRaw);
+
+        // Pre-lowercase allowed types so the hot-path comparison is a cheap Set.has().
+        const types: Set<string> | null =
+            !typesRaw || typesRaw.length === 0
+                ? null
+                : new Set<string>(typesRaw.map((t: string) => String(t).toLowerCase()));
+
+        clientFiltersCache.set(row.client_tag, { zips, types });
     }
 
-    console.log(`Loaded ZIP codes for ${clientZipCodesCache.size} client tags.`);
+    console.log(`Loaded filters for ${clientFiltersCache.size} client tags.`);
 }
 
 /**
@@ -112,7 +122,7 @@ async function safeRefreshCache(): Promise<void> {
     isRefreshing = true;
     
     try {
-        await loadClientZipCodesFormat();
+        await loadClientFilters();
     } finally {
         // Release lock and notify all waiters
         isRefreshing = false;
@@ -122,32 +132,57 @@ async function safeRefreshCache(): Promise<void> {
 }
 
 /**
- * Check if full_address contains any of the client_tag's allowed zip codes format
- * Returns true if (full_address?.toLowerCase() || "").includes(k) for any k in client's zip list
- * Refreshes all client_tags if the requested one is not in cache (thread-safe)
+ * Resolve a client_tag's filter struct, refreshing the cache once if missing.
+ * Returns null if the tag still cannot be found after a refresh — callers should
+ * treat that as "drop everything for this client" (same behavior as before).
+ *
+ * Use .has() so a cached `{ zips: null, types: null }` accept-all entry is NOT
+ * mistaken for "missing".
  */
-async function isZipCodeFormatAllowed(clientTag: string, fullAddress: string | null): Promise<boolean> {
-    // Use .has() so a cached `null` (accept-all sentinel) is NOT mistaken for "missing".
-    if (!clientZipCodesCache.has(clientTag)) {
+async function getClientFilter(clientTag: string): Promise<ClientFilter | null> {
+    if (!clientFiltersCache.has(clientTag)) {
         console.log(`Client tag '${clientTag}' not found in cache. Refreshing all client_tags...`);
         await safeRefreshCache();
 
-        if (!clientZipCodesCache.has(clientTag)) {
+        if (!clientFiltersCache.has(clientTag)) {
             console.warn(`Client tag '${clientTag}' not found in client_details after refresh.`);
-            return false;
+            return null;
         }
     }
 
     // Safe cast: .has() confirmed the key exists.
-    const allowedZips = clientZipCodesCache.get(clientTag) as Set<string> | null;
+    return clientFiltersCache.get(clientTag) as ClientFilter;
+}
 
-    // null sentinel = no zip filter configured → accept all rows
-    if (allowedZips === null) return true;
+/**
+ * Check if full_address contains any of the client's allowed zip-code substrings.
+ * `null` zips = accept-all sentinel.
+ */
+function matchesZip(filter: ClientFilter, fullAddress: string | null): boolean {
+    if (filter.zips === null) return true;
 
     const fullAddressLowercase = (fullAddress?.toLowerCase() || "");
     if (!fullAddressLowercase) return false;
 
-    return [...allowedZips].some((k) => fullAddressLowercase.includes(String(k).toLowerCase()));
+    for (const k of filter.zips) {
+        if (fullAddressLowercase.includes(String(k).toLowerCase())) return true;
+    }
+    return false;
+}
+
+/**
+ * Check if any element of the API result's `types` array is in the client's
+ * allowed-types set (case-insensitive). `null` types = accept-all sentinel.
+ * If the API result has no types array we cannot prove a match → reject.
+ */
+function matchesTypes(filter: ClientFilter, types: string[] | null | undefined): boolean {
+    if (filter.types === null) return true;
+    if (!types || types.length === 0) return false;
+
+    for (const t of types) {
+        if (filter.types.has(String(t).toLowerCase())) return true;
+    }
+    return false;
 }
 
 /**
@@ -269,14 +304,18 @@ async function processClientQuery(row: any) {
                     processed: true,
                 }));
 
-                // Filter results: keep only if full_address includes a client-allowed zip and has website
+                // Filter results: keep only rows that have a website AND pass both
+                // the client's zip-code filter and allowed-types filter.
+                // Resolve the client filter once for the whole batch — same client_tag
+                // for every row in `allResults`, no need to re-look it up per row.
+                const filter = await getClientFilter(row.client_tag);
                 const results: any[] = [];
-                for (const r of allResults) {
-                    if (r.website !== null) {
-                        const allowed = await isZipCodeFormatAllowed(row.client_tag, r.full_address);
-                        if (allowed) {
-                            results.push(r);
-                        }
+                if (filter !== null) {
+                    for (const r of allResults) {
+                        if (r.website === null) continue;
+                        if (!matchesZip(filter, r.full_address)) continue;
+                        if (!matchesTypes(filter, r.types)) continue;
+                        results.push(r);
                     }
                 }
 
@@ -359,8 +398,8 @@ async function mainLoop() {
 
     console.log(`Starting Supabase worker with max concurrency: ${MAX_CONCURRENCY}`);
 
-    // Load client ZIP codes once at startup
-    await loadClientZipCodesFormat();
+    // Load client filters (zips + allowed types) once at startup
+    await loadClientFilters();
 
     // Startup Check
     const { count: queuedCount, error: qErr } = await supabase
