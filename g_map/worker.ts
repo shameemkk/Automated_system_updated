@@ -14,7 +14,7 @@ const EXTERNAL_API_URL = process.env.EXTERNAL_API_URL || '';
 const SCRAPER_API_KEY = process.env.SCRAPER_API_KEY || '';
 const EXTERNAL_API_TIMEOUT = 120000;
 const API_CALL_DELAY = parseInt(process.env.API_CALL_DELAY || '250', 10);
-const DEBUG = process.env.DEBUG === 'false';
+const DEBUG = process.env.DEBUG?.toLowerCase() === 'true';
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in .env');
     process.exit(1);
@@ -29,7 +29,6 @@ const stats = {
     processed: 0,
     errors: 0,
     active: 0,
-    queuedInDb: 0
 };
 
 // Supabase Client
@@ -263,9 +262,9 @@ async function processClientQuery(row: any) {
             });
 
             apiResponse = response.data;
-            if (DEBUG) {
-                console.log(apiResponse)
-            }
+            // if (DEBUG) {
+            //     console.log(apiResponse)
+            // }
 
             // Non-ok status is a hard failure — break and let the existing throw below handle it.
             if (apiResponse?.status !== 'ok') break;
@@ -312,7 +311,7 @@ async function processClientQuery(row: any) {
                 const results: any[] = [];
                 if (filter !== null) {
                     for (const r of allResults) {
-                        if (r.website === null) continue;
+                        if (!r.website) continue;
                         if (!matchesZip(filter, r.full_address)) continue;
                         if (!matchesTypes(filter, r.types)) continue;
                         results.push(r);
@@ -320,29 +319,35 @@ async function processClientQuery(row: any) {
                 }
 
                 if (results.length > 0) {
-                    // Batch check: get all websites that already exist in "google map scraped data v1"
-                    const websites = results.map((r: any) => r.website);
-                    const { data: existingData } = await supabase
-                        .from('google map scraped data v1')
-                        .select('website')
-                        .in('website', websites);
+                    // Deduplicate within this API response — same website can appear twice
+                    const seenInBatch = new Set<string>();
+                    const dedupedResults = results.filter((r: any) => {
+                        if (seenInBatch.has(r.website)) return false;
+                        seenInBatch.add(r.website);
+                        return true;
+                    });
 
-                    const existingWebsites = new Set((existingData || []).map((d: any) => d.website));
-                    // if (DEBUG) console.log(websites);
-                    // Filter out results that already exist
-                    const newResults = results.filter((r: any) => !existingWebsites.has(r.website));
+                    // Split into sequential batches of 100.
+                    // Sequential is correct here — pg_try_advisory_xact_lock is non-blocking
+                    // so each batch finishes fast. Parallel batches would multiply concurrent
+                    // Supabase connections (100 workers × N batches) and risk pool exhaustion.
+                    const RPC_BATCH_SIZE = 100;
+                    let totalInserted = 0;
 
-                    // Insert one by one to handle unique constraint violations on website
-                    for (const result of newResults) {
-                        const { error: insertError } = await supabase
-                            .from('client_query_results')
-                            .insert(result);
+                    for (let i = 0; i < dedupedResults.length; i += RPC_BATCH_SIZE) {
+                        const batch = dedupedResults.slice(i, i + RPC_BATCH_SIZE);
+                        const { data: insertedCount, error: insertError } = await supabase
+                            .rpc('insert_results_deduped', {
+                                p_results: batch,
+                                p_dedup_mode: row.dedup_mode
+                            });
+                        if (insertError) throw insertError;
+                        totalInserted += insertedCount ?? 0;
+                    }
 
-                        // Ignore unique constraint violation (code 23505), throw other errors
-                        if (insertError && insertError.code !== '23505') {
-                            throw insertError;                
-                        }
-                        console.log("insertError:", insertError);
+                    if (DEBUG) {
+                        const duplicates = dedupedResults.length - totalInserted;
+                        console.log(`[Insert] Query ${row.id} | sent=${dedupedResults.length} inserted=${totalInserted} duplicates=${duplicates} mode=${row.dedup_mode}`);
                     }
                 }
             }
@@ -375,15 +380,25 @@ async function processClientQuery(row: any) {
             }
         } else if (err instanceof Error) {
             errorMessage = err.message;
+        } else if (err && typeof err === 'object' && 'message' in err) {
+            // Supabase PostgrestError: { code, message, details, hint }
+            errorMessage = `DB Error ${err.code ?? ''}: ${err.message}${err.details ? ` | ${err.details}` : ''}`;
         }
 
-        await supabase
+        console.error(`[Worker] Query ${row.id} failed → auto_error: ${errorMessage}`);
+
+        const { error: statusUpdateError } = await supabase
             .from('client_queries')
             .update({
                 status: 'auto_error',
                 api_status: errorMessage
             })
             .eq('id', row.id);
+
+        if (statusUpdateError) {
+            // If this fails the job stays at auto_processing and will never be retried.
+            console.error(`[Worker] CRITICAL: failed to set auto_error status for query ${row.id}:`, statusUpdateError);
+        }
 
     } finally {
         stats.active--;
@@ -415,8 +430,10 @@ async function mainLoop() {
 
     while (!shuttingDown) {
         try {
-            const currentPending = queue.pending;
-            const slotsAvailable = MAX_CONCURRENCY - currentPending;
+            // Use pending + size so we don't over-claim jobs from the DB.
+            // Jobs in queue.size are already marked auto_processing in the DB —
+            // if the process crashes they'd be stuck there with no retry path.
+            const slotsAvailable = MAX_CONCURRENCY - queue.pending - queue.size;
 
             if (slotsAvailable > 0) {
                 const jobs = await fetchAutoClientQueries(slotsAvailable);
