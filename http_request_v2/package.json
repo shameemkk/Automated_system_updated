@@ -1,0 +1,32 @@
+{
+  "name": "http-request-v2",
+  "version": "1.0.0",
+  "description": "Web scraper for extracting emails and Facebook URLs from websites using Playwright",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node worker.ts",
+    "dev": "node --watch worker.ts"
+  },
+  "keywords": [
+    "web-scraper",
+    "email-extraction",
+    "playwright",
+    "supabase",
+    "concurrency"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.38.0",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.3.1",
+    "p-queue": "^7.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
