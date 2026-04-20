@@ -231,8 +231,9 @@ async function processRow(row: any) {
             // Find matching client_query_results by full URL
             const { data: matchingResults, error: findError } = await supabase
                 .from('client_query_results')
-                .select('id, verified_emails')
+                .select('id, verified_emails, automation_id')
                 .eq('website', row.url)
+                .eq('automation_id', row.automation_id)
                 .limit(1);
 
             if (findError) {
