@@ -101,3 +101,21 @@ BEGIN
   RETURN affected_rows;
 END;
 $$ LANGUAGE plpgsql;
+
+-- RPC to reclaim rows stuck in auto_processing (worker crashed or scrape hung)
+CREATE OR REPLACE FUNCTION auto_reclaim_stuck_http_request(stale_minutes INT DEFAULT 10)
+RETURNS INT AS $$
+DECLARE
+  affected_rows INT;
+BEGIN
+  UPDATE public.email_scraper_node
+  SET status = 'auto_queued',
+      updated_at = NOW()
+  WHERE status = 'auto_processing'
+    AND scrape_type = 'http_request'
+    AND updated_at < NOW() - (stale_minutes || ' minutes')::INTERVAL;
+
+  GET DIAGNOSTICS affected_rows = ROW_COUNT;
+  RETURN affected_rows;
+END;
+$$ LANGUAGE plpgsql;

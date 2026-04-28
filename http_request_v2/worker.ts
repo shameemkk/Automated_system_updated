@@ -10,6 +10,8 @@ dotenv.config();
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const MAX_CONCURRENCY = parseInt(process.env.MAX_CONCURRENCY || '50', 10);
+const OVERALL_TIMEOUT_MS = parseInt(process.env.OVERALL_TIMEOUT_MS || '120000', 10);
+const HARD_GRACE_MS = parseInt(process.env.HARD_GRACE_MS || '30000', 10);
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in .env');
@@ -20,8 +22,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
 const stats = {
     processed: 0,
     errors: 0,
-    active: 0,
-    queuedInDb: 0
+    active: 0
 };
 
 // Batch update types and buffer
@@ -52,6 +53,8 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
 const queue = new PQueue({ concurrency: MAX_CONCURRENCY });
 
 let shuttingDown = false;
+let flushInterval: NodeJS.Timeout | null = null;
+let activeFlush: Promise<void> | null = null;
 
 // --- UTILITIES ---
 
@@ -84,27 +87,39 @@ async function retryDbOperation<T>(operation: () => Promise<T>, maxRetries = 3):
 // --- BATCH UPDATE LOGIC ---
 
 async function flushBatchUpdates(): Promise<void> {
+    // Wait for any in-flight flush to finish first, so callers can rely on a clean buffer state
+    if (activeFlush) {
+        await activeFlush;
+    }
     if (pendingUpdates.length === 0) return;
 
     // Atomically take all pending updates
     const batch = pendingUpdates.splice(0);
 
-    try {
-        const { error } = await retryDbOperation(async () => {
-            return await supabase.rpc('auto_batch_update_email_scraper_nodes', {
-                updates: batch
+    activeFlush = (async () => {
+        try {
+            const { error } = await retryDbOperation(async () => {
+                return await supabase.rpc('auto_batch_update_email_scraper_nodes', {
+                    updates: batch
+                });
             });
-        });
 
-        if (error) {
-            console.error(`[Worker] Batch update failed for ${batch.length} rows:`, error);
+            if (error) {
+                console.error(`[Worker] Batch update failed for ${batch.length} rows:`, error);
+                requeueFailedBatch(batch);
+            } else {
+                console.log(`[Worker] Batch updated ${batch.length} rows`);
+            }
+        } catch (err) {
+            console.error(`[Worker] Batch update exception for ${batch.length} rows:`, err);
             requeueFailedBatch(batch);
-        } else {
-            console.log(`[Worker] Batch updated ${batch.length} rows`);
         }
-    } catch (err) {
-        console.error(`[Worker] Batch update exception for ${batch.length} rows:`, err);
-        requeueFailedBatch(batch);
+    })();
+
+    try {
+        await activeFlush;
+    } finally {
+        activeFlush = null;
     }
 }
 
@@ -136,9 +151,25 @@ function requeueFailedBatch(batch: PendingUpdate[]): void {
 async function processRow(row: any) {
     stats.active++;
     const start = Date.now();
+    const ac = new AbortController();
+    const abortTimer = setTimeout(() => ac.abort(), OVERALL_TIMEOUT_MS);
+    let killTimer: NodeJS.Timeout | null = null;
 
     try {
-        const scrapeResult = await scrapeWebsiteDirect(row.url);
+        const scrapePromise = scrapeWebsiteDirect(row.url, { signal: ac.signal });
+        scrapePromise.catch(() => {});
+        const killSwitch = new Promise<never>((_, reject) => {
+            const arm = () => {
+                killTimer = setTimeout(
+                    () => reject(new Error(`Hard job timeout: abort ignored after ${HARD_GRACE_MS}ms grace`)),
+                    HARD_GRACE_MS
+                );
+            };
+            if (ac.signal.aborted) arm();
+            else ac.signal.addEventListener('abort', arm, { once: true });
+        });
+
+        const scrapeResult = await Promise.race([scrapePromise, killSwitch]);
         const normalized = normalizeResponse([{ json: scrapeResult }])[0].json;
 
         // Push to batch buffer instead of individual DB update
@@ -151,7 +182,7 @@ async function processRow(row: any) {
             needs_browser_rendering: normalized.needs_browser_rendering
         });
 
-        if (normalized.status === 'auto_error') {
+        if (normalized.status === 'auto_need_browser_rendering') {
             stats.errors++;
         } else {
             stats.processed++;
@@ -169,14 +200,14 @@ async function processRow(row: any) {
             errorMessage = err.message;
         }
 
-        // Push error to batch buffer
+        // Push error to batch buffer — route to browser rendering for retry
         pendingUpdates.push({
             id: row.id,
-            status: 'auto_error',
+            status: 'auto_need_browser_rendering',
             emails: [],
             facebook_urls: [],
             message: errorMessage,
-            needs_browser_rendering: false
+            needs_browser_rendering: true
         });
 
         // Flush if batch is large enough
@@ -185,6 +216,8 @@ async function processRow(row: any) {
         }
 
     } finally {
+        clearTimeout(abortTimer);
+        if (killTimer) clearTimeout(killTimer);
         stats.active--;
         const duration = Date.now() - start;
         console.log(`[Worker] Job ${row.id} finished in ${duration}ms (Active: ${stats.active}, Pending: ${pendingUpdates.length})`);
@@ -214,14 +247,24 @@ async function fetchAndClaim(slots: number): Promise<any[]> {
 async function mainLoop() {
     let backoffMs = 1000;
     const maxBackoff = 60000;
+    let silentTicks = 0;
 
     console.log(`Starting Supabase worker with max concurrency: ${MAX_CONCURRENCY}`);
     console.log(`Batch update: flush every ${BATCH_FLUSH_INTERVAL_MS}ms or every ${BATCH_FLUSH_SIZE} items`);
 
     // Start periodic batch flush timer
-    const flushInterval = setInterval(() => {
+    flushInterval = setInterval(() => {
         flushBatchUpdates().catch(err => console.error('[Worker] Periodic flush error:', err));
     }, BATCH_FLUSH_INTERVAL_MS);
+
+    // Reclaim stuck auto_processing rows (worker crashed or scrape hung)
+    const { data: reclaimed, error: reclaimErr } = await supabase
+        .rpc('auto_reclaim_stuck_http_request', { stale_minutes: 10 });
+    if (reclaimErr) {
+        console.error('Reclaim stuck rows failed:', reclaimErr);
+    } else if (reclaimed && reclaimed > 0) {
+        console.log(`Reclaimed ${reclaimed} stuck auto_processing rows.`);
+    }
 
     // Startup Check - only count http_request scrape_type
     const { count: queuedCount, error: qErr } = await supabase
@@ -255,14 +298,15 @@ async function mainLoop() {
 
     while (!shuttingDown) {
         try {
-            const currentPending = queue.pending;
-            const slotsAvailable = MAX_CONCURRENCY - currentPending;
+            const inFlight = queue.pending + queue.size;
+            const slotsAvailable = MAX_CONCURRENCY - inFlight;
 
             if (slotsAvailable > 0) {
                 const jobs = await fetchAndClaim(slotsAvailable);
 
                 if (jobs.length > 0) {
                     backoffMs = 1000;
+                    silentTicks = 0;
                     console.log(`Claimed ${jobs.length} jobs.`);
                     jobs.forEach(row => {
                         queue.add(() => processRow(row));
@@ -283,6 +327,10 @@ async function mainLoop() {
                         await sleep(backoffMs);
                         backoffMs = Math.min(backoffMs * 2, maxBackoff);
                     } else {
+                        silentTicks++;
+                        if (silentTicks % 10 === 0) {
+                            console.log(`[Worker] Waiting for ${queue.pending} active jobs to finish (silent tick ${silentTicks})`);
+                        }
                         await sleep(1000);
                     }
                 }
@@ -301,8 +349,17 @@ async function mainLoop() {
 async function gracefulShutdown(signal: string) {
     console.log(`\nReceived ${signal}. Shutting down...`);
     shuttingDown = true;
+    if (flushInterval) {
+        clearInterval(flushInterval);
+        flushInterval = null;
+    }
     console.log('Waiting for active jobs to complete...');
     await queue.onIdle();
+    // Wait for any periodic flush that was already in-flight when shutdown started
+    if (activeFlush) {
+        console.log('Waiting for in-flight flush to complete...');
+        await activeFlush;
+    }
     // Flush any remaining batch updates before exit
     if (pendingUpdates.length > 0) {
         console.log(`Flushing ${pendingUpdates.length} remaining batch updates...`);

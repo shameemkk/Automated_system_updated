@@ -25,6 +25,7 @@ const PAGE_NAVIGATION_TIMEOUT_MS = Math.max(5000, parseInt(process.env.PAGE_NAVI
 const MAX_STORED_VISITED_URLS = Math.max(1, parseInt(process.env.MAX_STORED_VISITED_URLS, 10) || 200);
 const MAX_SUBPAGE_CRAWLS = Math.max(1, parseInt(process.env.MAX_SUBPAGE_CRAWLS, 10) || 20);
 const OVERALL_TIMEOUT_MS = Math.max(10000, parseInt(process.env.OVERALL_TIMEOUT_MS, 10) || 120000);
+const MAX_HTML_BYTES = Math.max(100_000, parseInt(process.env.MAX_HTML_BYTES, 10) || 5_000_000);
 
 // =========================================================================
 // EMAIL FILTERING
@@ -424,7 +425,18 @@ async function runWithConcurrency(items, limit, iteratee) {
   await Promise.all(workers);
 }
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const delay = (ms, signal) => new Promise((resolve) => {
+  if (signal?.aborted) { resolve(); return; }
+  const timer = setTimeout(() => {
+    if (signal) signal.removeEventListener('abort', onAbort);
+    resolve();
+  }, ms);
+  const onAbort = () => {
+    clearTimeout(timer);
+    resolve();
+  };
+  if (signal) signal.addEventListener('abort', onAbort, { once: true });
+});
 
 // =========================================================================
 // HTTP FETCHING
@@ -442,7 +454,11 @@ async function fetchHtml(url, identity, signal) {
   const timer = setTimeout(() => controller.abort(), PAGE_NAVIGATION_TIMEOUT_MS);
 
   const onExternalAbort = () => controller.abort();
-  if (signal) signal.addEventListener('abort', onExternalAbort, { once: true });
+  if (signal?.aborted) {
+    controller.abort();
+  } else if (signal) {
+    signal.addEventListener('abort', onExternalAbort, { once: true });
+  }
 
   try {
     const response = await fetch(url, {
@@ -458,7 +474,16 @@ async function fetchHtml(url, identity, signal) {
       throw new Error(`Non-HTML content: ${contentType}`);
     }
 
-    return await response.text();
+    const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
+    if (contentLength > MAX_HTML_BYTES) {
+      throw new Error(`HTML too large: ${contentLength} bytes`);
+    }
+
+    const text = await response.text();
+    if (text.length > MAX_HTML_BYTES) {
+      throw new Error(`HTML too large: ${text.length} bytes`);
+    }
+    return text;
   } finally {
     clearTimeout(timer);
     if (signal) signal.removeEventListener('abort', onExternalAbort);
@@ -593,8 +618,10 @@ async function scrapeUrl(url, depth, visitedUrls, signal) {
 
   if (SCRAPE_DELAY_MAX_MS > 0) {
     const ms = SCRAPE_DELAY_MIN_MS + Math.random() * (SCRAPE_DELAY_MAX_MS - SCRAPE_DELAY_MIN_MS);
-    if (ms > 0) await delay(ms);
+    if (ms > 0) await delay(ms, signal);
   }
+
+  if (signal?.aborted) return result;
 
   const identity = getNextIdentity();
 
@@ -704,7 +731,7 @@ function createErrorResult(error, message = error) {
     pages_crawled: 0,
     error,
     message,
-    needs_browser_rendering: false,
+    needs_browser_rendering: true,
   };
 }
 
@@ -726,12 +753,19 @@ export async function scrapeWebsiteDirect(url, options = {}) {
     );
   }
 
-  const timeoutMs = Math.max(1000, Number(options.timeoutMs) || OVERALL_TIMEOUT_MS);
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let signal;
+  let timer;
+  if (options.signal) {
+    signal = options.signal;
+  } else {
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs) || OVERALL_TIMEOUT_MS);
+    const ac = new AbortController();
+    timer = setTimeout(() => ac.abort(), timeoutMs);
+    signal = ac.signal;
+  }
 
   try {
-    const result = await scrapeWebsite(url, { signal: ac.signal });
+    const result = await scrapeWebsite(url, { signal });
     if (!result) {
       return createErrorResult(
         'Scrape timed out',
@@ -743,7 +777,7 @@ export async function scrapeWebsiteDirect(url, options = {}) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to scrape the website';
     return createErrorResult(errorMessage, errorMessage);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 }
 

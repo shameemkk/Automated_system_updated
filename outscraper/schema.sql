@@ -20,25 +20,26 @@ returns void
 language plpgsql
 as $$
 begin
-  -- 1. Update email_scraper_node and capture the URLs that were changed
+  -- 1. Update email_scraper_node and capture the URLs + automation_ids that were changed
   with updated_nodes as (
     update public.email_scraper_node
     set status = 'auto_final_completed'
-    where 
+    where
       scrape_type = 'outscraper'
       and mode = 'auto'
       and status = 'auto_completed'
       and (emails is null or cardinality(emails) = 0)
-    returning url -- Return the URL to pass to the next update
+    returning url, automation_id
   )
-  
-  -- 2. Update client_query_results using the URLs from the first step
+
+  -- 2. Update client_query_results matching on url + automation_id
   update public.client_query_results as cqr
-  set 
+  set
     gpt_process = 'auto_completed',
     mode = 'auto_completed_noEmails'
   from updated_nodes
-  where cqr.website = updated_nodes.url;
+  where cqr.website = updated_nodes.url
+    and cqr.automation_id = updated_nodes.automation_id;
 end;
 $$;
 

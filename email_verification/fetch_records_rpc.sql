@@ -5,7 +5,8 @@ CREATE OR REPLACE FUNCTION fetch_email_verification_records(batch_size integer D
 RETURNS TABLE (
     record_id bigint,
     emails text[],
-    url text
+    url text,
+    automation_id bigint
 )
 LANGUAGE plpgsql
 AS $$
@@ -38,10 +39,11 @@ BEGIN
     
     -- Return only the essential columns needed by the worker
     RETURN QUERY
-    SELECT 
+    SELECT
         esn.id,
         esn.emails,
-        esn.url
+        esn.url,
+        esn.automation_id
     FROM email_scraper_node esn
     WHERE esn.id = ANY(selected_ids)
     ORDER BY esn.id ASC;
