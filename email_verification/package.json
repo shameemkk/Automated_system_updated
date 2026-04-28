@@ -2,12 +2,13 @@
   "name": "email_verification",
   "version": "1.0.0",
   "description": "",
-  "main": "worker.js",
+  "main": "src/index.ts",
   "type": "module",
   "scripts": {
-    "start": "npx tsx worker.ts",
-    "dev": "npx tsx watch worker.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "npx tsx src/index.ts",
+    "dev": "npx tsx watch src/index.ts",
+    "test": "npx tsx test/run-test.ts",
+    "test:loop": "npx tsx test/run-test.ts --loop"
   },
   "keywords": [],
   "author": "",

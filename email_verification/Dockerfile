@@ -9,7 +9,8 @@ COPY package*.json ./
 RUN npm install
 
 # Copy source
-COPY worker.ts ./
+COPY tsconfig.json ./
+COPY src/ ./src/
 
 
 CMD ["npm", "start"]

@@ -6,6 +6,8 @@ create table if not exists public.email_scraper_node (
   status text null,
   facebook_urls text[] null,
   emails text[] null,
+  verified_emails text[] null,
+  rejected_emails jsonb null,
   message text null,
   retry_count integer not null default 0,
   updated_at timestamp with time zone not null default now(),
