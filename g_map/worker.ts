@@ -43,8 +43,9 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
 // Each field's `null` value = "accept all" sentinel (client has no filter configured for that field).
 // Absent map key = client_tag not yet loaded, needs refresh.
 type ClientFilter = {
-    zips: Set<string> | null;   // null = no zip filter -> accept all
-    types: Set<string> | null;  // null = no type filter -> accept all (lowercased entries)
+    zips: Set<string> | null;             // null = no zip filter -> accept all
+    types: Set<string> | null;            // allow-list; null = no allow-list (lowercased entries)
+    notAllowedTypes: Set<string> | null;  // block-list; null = no block-list (lowercased entries)
 };
 const clientFiltersCache = new Map<string, ClientFilter>();
 
@@ -70,7 +71,7 @@ async function loadClientFilters() {
     console.log('Loading client filters (zips + types) from client_details...');
     const { data, error } = await supabase
         .from('client_details')
-        .select('client_tag, zip_codes_format, allowed_types');
+        .select('client_tag, zip_codes_format, allowed_types, not_allowed_types');
 
     if (error) {
         console.error('Error loading client_details:', error);
@@ -88,6 +89,7 @@ async function loadClientFilters() {
     for (const row of data) {
         const zipsRaw = row.zip_codes_format;
         const typesRaw = row.allowed_types;
+        const notAllowedTypesRaw = row.not_allowed_types;
 
         const zips: Set<string> | null =
             !zipsRaw || zipsRaw.length === 0 ? null : new Set<string>(zipsRaw);
@@ -98,7 +100,12 @@ async function loadClientFilters() {
                 ? null
                 : new Set<string>(typesRaw.map((t: string) => String(t).toLowerCase()));
 
-        clientFiltersCache.set(row.client_tag, { zips, types });
+        const notAllowedTypes: Set<string> | null =
+            !notAllowedTypesRaw || notAllowedTypesRaw.length === 0
+                ? null
+                : new Set<string>(notAllowedTypesRaw.map((t: string) => String(t).toLowerCase()));
+
+        clientFiltersCache.set(row.client_tag, { zips, types, notAllowedTypes });
     }
 
     console.log(`Loaded filters for ${clientFiltersCache.size} client tags.`);
@@ -182,6 +189,20 @@ function matchesTypes(filter: ClientFilter, types: string[] | null | undefined):
         if (filter.types.has(String(t).toLowerCase())) return true;
     }
     return false;
+}
+
+/**
+ * Block-list counterpart to matchesTypes. Reject only with proof — when the API
+ * result has no types we cannot prove a match against the block-list, so accept.
+ */
+function matchesNotAllowedTypes(filter: ClientFilter, types: string[] | null | undefined): boolean {
+    if (filter.notAllowedTypes === null) return true;
+    if (!types || types.length === 0) return true;
+
+    for (const t of types) {
+        if (filter.notAllowedTypes.has(String(t).toLowerCase())) return false;
+    }
+    return true;
 }
 
 /**
@@ -314,6 +335,7 @@ async function processClientQuery(row: any) {
                         if (!r.website) continue;
                         if (!matchesZip(filter, r.full_address)) continue;
                         if (!matchesTypes(filter, r.types)) continue;
+                        if (!matchesNotAllowedTypes(filter, r.types)) continue;
                         results.push(r);
                     }
                 }
