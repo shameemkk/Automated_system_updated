@@ -1,0 +1,23 @@
+{
+  "name": "htmlparser_worker",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Worker that consumes the email_scraper_node queue and routes URLs to the htmlparser HTTP service.",
+  "main": "worker.ts",
+  "scripts": {
+    "start": "npx tsx worker.ts",
+    "dev": "npx tsx watch worker.ts"
+  },
+  "dependencies": {
+    "axios": "^1.12.2",
+    "dotenv": "^17.2.3",
+    "p-queue": "^8.1.0",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0"
+  }
+}
