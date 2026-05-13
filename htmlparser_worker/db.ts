@@ -131,6 +131,7 @@ export async function countQueued(scrapeType = 'http_request'): Promise<number> 
 export async function createDedicatedClient(): Promise<pkg.Client> {
     const client = new Client({
         connectionString: process.env.DATABASE_URL,
+        connectionTimeoutMillis: 5_000,
         ssl: process.env.PG_SSL === 'false' ? false : { rejectUnauthorized: false },
     });
     await client.connect();

@@ -35,11 +35,11 @@ const COOLDOWN_AFTER_FAILURES = parseInt(process.env.HTMLPARSER_COOLDOWN_AFTER |
 
 console.log(`[scraper] configured ${targets.length} target(s): ${URLS.join(', ')}`);
 
-function pickTarget(): Target {
+function pickTarget(): Target | null {
     const now = Date.now();
     const healthy = targets.filter(t => t.cooldownUntil <= now);
-    const pool = healthy.length > 0 ? healthy : targets;
-    return pool.reduce((best, t) =>
+    if (healthy.length === 0) return null;
+    return healthy.reduce((best, t) =>
         t.activeCount < best.activeCount ||
         (t.activeCount === best.activeCount && t.failureCount < best.failureCount)
             ? t
@@ -62,6 +62,11 @@ export interface ScrapeResult {
 
 export async function scrapeWebsite(url: string): Promise<ScrapeResult> {
     const target = pickTarget();
+    if (!target) {
+        const now = Date.now();
+        const nextAt = Math.min(...targets.map(t => t.cooldownUntil));
+        throw new Error(`htmlparser: all ${targets.length} target(s) in cooldown for ${Math.max(0, nextAt - now)}ms more`);
+    }
     target.activeCount++;
     target.totalRequests++;
 
