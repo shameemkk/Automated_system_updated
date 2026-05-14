@@ -1,0 +1,15 @@
+{
+  "name": "email_scraper_worker",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Worker that distributes scraping jobs across multiple API servers",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js",
+    "dev": "node --watch worker.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "pg": "^8.16.0"
+  }
+}
